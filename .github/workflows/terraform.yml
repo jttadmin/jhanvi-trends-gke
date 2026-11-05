@@ -1,0 +1,153 @@
+name: terraform
+
+# Per-environment plan/apply.
+#   PR  -> plan every enabled env, comment the plans on the PR
+#   main -> apply: dev automatically, stage/prod after approval
+#           (add required reviewers to the "stage" and "prod" GitHub environments)
+#
+# Repo variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   ENABLED_ENVS                 JSON list of envs that exist, e.g. ["dev"]  then ["dev","stage","prod"]
+#   GCP_WIF_PROVIDER_<ENV>       e.g. GCP_WIF_PROVIDER_DEV
+#   GCP_TF_SERVICE_ACCOUNT_<ENV> e.g. GCP_TF_SERVICE_ACCOUNT_DEV
+# Repo secrets:
+#   GITOPS_REPO_TOKEN, ALERT_SLACK_WEBHOOK_URL (optional)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_gitops_repo_token: ${{ secrets.GITOPS_REPO_TOKEN }}
+  TF_VAR_alert_slack_webhook_url: ${{ secrets.ALERT_SLACK_WEBHOOK_URL }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - name: Validate every env
+        run: |
+          for d in envs/*/; do
+            echo "::group::validate $d"
+            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" validate
+            echo "::endgroup::"
+          done
+      - uses: azure/setup-helm@v4
+      - name: Lint module charts
+        run: |
+          helm lint modules/gke-platform/charts/bootstrap --set letsencryptEmail=ci@example.com
+          helm lint modules/gke-platform/charts/observability-extras
+
+  plan:
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(vars.ENABLED_ENVS || '["dev"]') }}
+    concurrency:
+      group: terraform-${{ matrix.env }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: envs/${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: upper
+        run: echo "env=$(echo '${{ matrix.env }}' | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
+          service_account: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - run: terraform init -input=false
+      - id: plan
+        run: |
+          set +e
+          terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan > plan.txt 2>&1
+          code=$?
+          cat plan.txt
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          [ "$code" -eq 1 ] && exit 1 || exit 0
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('envs/${{ matrix.env }}/plan.txt', 'utf8');
+            if (plan.length > 60000) plan = plan.slice(-60000);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: "### Terraform plan: `${{ matrix.env }}`\n```\n" + plan + "\n```"
+            });
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && steps.plan.outputs.exitcode == '2'
+        with:
+          name: tfplan-${{ matrix.env }}
+          path: envs/${{ matrix.env }}/tfplan
+          retention-days: 3
+
+  apply:
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      max-parallel: 1 # dev first, then stage, then prod
+      matrix:
+        env: ${{ fromJSON(vars.ENABLED_ENVS || '["dev"]') }}
+    environment: ${{ matrix.env }} # stage/prod: add required reviewers in repo settings
+    concurrency:
+      group: terraform-${{ matrix.env }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: envs/${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan_artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true # no artifact = nothing to apply for this env
+        with:
+          name: tfplan-${{ matrix.env }}
+          path: envs/${{ matrix.env }}
+      - id: upper
+        if: steps.plan_artifact.outcome == 'success'
+        run: echo "env=$(echo '${{ matrix.env }}' | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
+      - if: steps.plan_artifact.outcome == 'success'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
+          service_account: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
+      - if: steps.plan_artifact.outcome == 'success'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.plan_artifact.outcome == 'success'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - if: steps.plan_artifact.outcome == 'success'
+        run: terraform init -input=false
+      - if: steps.plan_artifact.outcome == 'success'
+        run: terraform apply -input=false -lock-timeout=5m tfplan
+      - if: steps.plan_artifact.outcome != 'success'
+        run: echo "No changes for ${{ matrix.env }}."

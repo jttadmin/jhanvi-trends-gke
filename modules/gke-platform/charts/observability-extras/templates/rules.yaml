@@ -1,0 +1,118 @@
+{{- $ns := join "|" .Values.appNamespaces -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: jhanvi-trends-alerts
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    # ---------- Edge: what customers on shop.bhumaji.com actually see ----------
+    - name: jhanvi-edge
+      rules:
+        - alert: StoreHigh5xxRate
+          expr: |
+            sum by (service) (rate(traefik_service_requests_total{code=~"5.."}[5m]))
+              /
+            sum by (service) (rate(traefik_service_requests_total[5m])) > 0.05
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{`{{ $labels.service }}`}} is returning >5% 5xx"
+            description: "5xx ratio is {{`{{ $value | humanizePercentage }}`}} over 5m."
+        - alert: StoreHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (service, le) (rate(traefik_service_request_duration_seconds_bucket[5m]))) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.service }}`}} p95 latency above 1s"
+            description: "p95 is {{`{{ $value | humanizeDuration }}`}}."
+        - alert: TLSCertExpiringSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 7 * 86400
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "Certificate {{`{{ $labels.name }}`}} expires in under 7 days"
+            description: "cert-manager has not renewed it; check the Certificate and ClusterIssuer."
+
+    # ---------- Services (from Tempo span metrics, OTel-instrumented apps) ----------
+    - name: jhanvi-services
+      rules:
+        - alert: ServiceErrorRateHigh
+          expr: |
+            sum by (service) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              /
+            sum by (service) (rate(traces_spanmetrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m])) > 0.05
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.service }}`}} error rate above 5%"
+            description: "Open Grafana → Explore → Tempo and filter status=error for this service."
+
+    # ---------- Workloads ----------
+    - name: jhanvi-workloads
+      rules:
+        - alert: AppPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace=~"{{ $ns }}"}[15m]) > 3
+          labels: { severity: critical }
+          annotations:
+            summary: "{{`{{ $labels.namespace }}/{{ $labels.pod }}`}} restarted >3 times in 15m"
+            description: "Container {{`{{ $labels.container }}`}}. Check logs in Grafana (Loki)."
+        - alert: AppDeploymentUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"{{ $ns }}"} == 0
+              and kube_deployment_spec_replicas{namespace=~"{{ $ns }}"} > 0
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{`{{ $labels.deployment }}`}} has no available pods"
+            description: "Every replica of {{`{{ $labels.namespace }}/{{ $labels.deployment }}`}} is down."
+        - alert: HPAAtMaxReplicas
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace=~"{{ $ns }}"}
+              >= kube_horizontalpodautoscaler_spec_max_replicas{namespace=~"{{ $ns }}"}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "HPA {{`{{ $labels.horizontalpodautoscaler }}`}} pinned at max replicas"
+            description: "Demand exceeds the 70% CPU/memory target even at max scale; raise maxReplicas or node pool size."
+        - alert: AppContainerMemoryNearLimit
+          expr: |
+            max by (namespace, pod, container) (container_memory_working_set_bytes{namespace=~"{{ $ns }}", container!=""})
+              /
+            max by (namespace, pod, container) (kube_pod_container_resource_limits{namespace=~"{{ $ns }}", resource="memory"}) > 0.9
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}/{{ $labels.container }}`}} above 90% of memory limit"
+            description: "Likely to be OOMKilled soon."
+
+    # ---------- Data stores and nodes ----------
+    - name: jhanvi-platform
+      rules:
+        - alert: PersistentVolumeFillingUp
+          expr: |
+            kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.15
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "PVC {{`{{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }}`}} under 15% free"
+            description: "Resize the PVC (standard-rwo supports online expansion)."
+        - alert: StatefulPodNotReady
+          expr: |
+            kube_statefulset_status_replicas_ready < kube_statefulset_replicas
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "StatefulSet {{`{{ $labels.namespace }}/{{ $labels.statefulset }}`}} not fully ready"
+            description: "Postgres/MongoDB/Redis/Kafka replica down for 10m."
+        - alert: SpotNodePreemptionsHigh
+          expr: |
+            changes(count(kube_node_labels{label_workload="apps"})[1h:5m]) > 4
+          labels: { severity: info }
+          annotations:
+            summary: "Apps Spot pool churned more than 4 times in an hour"
+            description: "Frequent preemption; consider a small on-demand floor for the apps pool."

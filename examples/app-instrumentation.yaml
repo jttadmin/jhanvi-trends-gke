@@ -1,0 +1,52 @@
+# Copy these pieces into each service's Helm chart in jttadmin/Jhanvi-Trends.
+# Nothing here is applied by Terraform.
+
+# 1) Env vars on every Deployment container (works for Java, Node, Go, Python OTel SDKs)
+env:
+  - name: OTEL_SERVICE_NAME
+    value: order-service                      # change per service
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: http://otel-gateway.observability.svc:4318
+  - name: OTEL_EXPORTER_OTLP_PROTOCOL
+    value: http/protobuf
+  - name: OTEL_RESOURCE_ATTRIBUTES
+    value: service.namespace=jhanvi-trends,deployment.environment=prod
+  - name: OTEL_TRACES_SAMPLER
+    value: parentbased_traceidratio
+  - name: OTEL_TRACES_SAMPLER_ARG
+    value: "0.25"                             # keep 25% of traces; raise while debugging
+  - name: OTEL_LOGS_EXPORTER
+    value: none                               # stdout is already shipped to Loki by otel-agent
+---
+# Spring Boot (order-service): add the OTel Java agent instead of code changes
+#   JAVA_TOOL_OPTIONS=-javaagent:/otel/opentelemetry-javaagent.jar
+# and log JSON with trace_id/span_id so Grafana links logs → traces.
+---
+# 2) Optional: scrape a /metrics endpoint the old Prometheus way
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: order-service
+  namespace: jhanvi-trends
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-service
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 30s
+---
+# 3) Ship a Grafana dashboard with the service (sidecar picks it up from any namespace)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-dashboard
+  namespace: jhanvi-trends
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Jhanvi Trends
+data:
+  order-service.json: |
+    { "title": "Order service", "panels": [], "schemaVersion": 39 }
