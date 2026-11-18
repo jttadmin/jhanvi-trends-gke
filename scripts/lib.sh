@@ -107,11 +107,23 @@ kept_state_addrs() {
 # Write import blocks for everything kept in GCP but missing from state (IP, buckets, disks).
 # Terraform adopts them during the normal apply; nothing is recreated.
 write_kept_imports() {
-  local st n=0 name zone key i
+  local st n=0 name zone key i other f
   st="$(terraform state list 2>/dev/null || true)"
+  # Import blocks already declared in other .tf files of this env (hand-written or left
+  # over from an older script). Terraform rejects a second block for the same address,
+  # so those addresses are skipped here and left to the other file.
+  other=""
+  for f in "$ENV_DIR"/*.tf; do
+    [[ -e "$f" && "$f" != "$IMPORT_FILE" ]] || continue
+    other+="$(sed -n 's/^[[:space:]]*to[[:space:]]*=[[:space:]]*//p' "$f" | tr -d ' ')"$'\n'
+    grep -q '^[[:space:]]*import[[:space:]]*{' "$f" && warn "$(basename "$f") also has import blocks; delete it if it was left over from an earlier run"
+  done
   has() { grep -qxF "$1" <<<"$st"; }
   : > "$IMPORT_FILE.tmp"
-  emit() { printf 'import {\n  to = %s\n  id = "%s"\n}\n\n' "$1" "$2" >> "$IMPORT_FILE.tmp"; n=$((n+1)); }
+  emit() {
+    if grep -qxF "$1" <<<"$other"; then warn "import for $1 already in another file - not duplicated"; return; fi
+    printf 'import {\n  to = %s\n  id = "%s"\n}\n\n' "$1" "$2" >> "$IMPORT_FILE.tmp"; n=$((n+1))
+  }
 
   if ip_exists && ! has "$IP_ADDR"; then emit "$IP_ADDR" "$IP_ID"; fi
   for i in "${!KEPT_BUCKETS[@]}"; do
