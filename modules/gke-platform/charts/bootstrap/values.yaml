@@ -1,6 +1,6 @@
 letsencryptEmail: ""
 
 gitops:
-  repoURL: https://github.com/jttadmin/Jhanvi-Trends.git
+  repoURL: https://github.com/jttadmin/jhanvi-trends-gke.git
   targetRevision: main
-  path: argocd/apps
+  path: argocd/envs/dev

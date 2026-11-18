@@ -1,4 +1,4 @@
-# Copy these pieces into each service's Helm chart in jttadmin/Jhanvi-Trends.
+# Copy these pieces into each service's Helm chart (deploy/charts/jhanvi-trends in this repo).
 # Nothing here is applied by Terraform.
 
 # 1) Env vars on every Deployment container (works for Java, Node, Go, Python OTel SDKs)

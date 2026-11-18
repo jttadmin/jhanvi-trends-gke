@@ -1,5 +1,5 @@
-# Overrides for the GKE clusters built by jttadmin/jhanvi-trends-infra.
-# Used together with values.yaml (CI keeps bumping image tags there, so every cluster gets them).
+# Overrides shared by every GKE cluster built by this repo (dev, stage, prod).
+# Layered as values.yaml -> values-gke.yaml -> values-<env>.yaml; image tags live in values-<env>.yaml.
 
 global:
   environment: gke-dev

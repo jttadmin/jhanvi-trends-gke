@@ -1,5 +1,6 @@
-# Test (Dockerfile test stage) -> build -> scan -> push images for changed services, then bump their tags in the Helm
-# values so Argo CD rolls them out (GitOps: the cluster is never touched from CI).
+# Test (Dockerfile test stage) -> build -> scan -> push images for changed services, then bump their tags in
+# values-dev.yaml so Argo CD rolls them out to dev (GitOps: the cluster is never touched from CI).
+# Stage and prod only change through the promote workflow (promote.yaml), which opens a PR.
 #
 # Actions are pinned to commit SHAs (tag in the trailing comment); Dependabot keeps them current.
 name: ci
@@ -30,6 +31,8 @@ permissions:
 env:
   REGISTRY: docker.io
   CHART: deploy/charts/jhanvi-trends
+  # The only values file CI writes. Stage/prod tags move through promote.yaml.
+  DEV_VALUES: deploy/charts/jhanvi-trends/values-dev.yaml
 
 jobs:
   changes:
@@ -88,8 +91,16 @@ jobs:
       - name: Lint and render
         run: |
           helm lint "$CHART"
-          helm template jhanvi-trends "$CHART" -n jhanvi-trends > "$RUNNER_TEMP/rendered.yaml"
-          echo "Rendered $(grep -c '^kind:' "$RUNNER_TEMP/rendered.yaml") objects"
+          # Render exactly what each cluster's Argo CD renders (see argocd/envs/<env>/jhanvi-trends.yaml).
+          : > "$RUNNER_TEMP/rendered.yaml"
+          for env in dev stage prod; do
+            helm lint "$CHART" -f "$CHART/values-gke.yaml" -f "$CHART/values-$env.yaml"
+            helm template jhanvi-trends "$CHART" -n jhanvi-trends \
+              -f "$CHART/values-gke.yaml" -f "$CHART/values-$env.yaml" > "$RUNNER_TEMP/rendered-$env.yaml"
+            echo "$env: rendered $(grep -c '^kind:' "$RUNNER_TEMP/rendered-$env.yaml") objects"
+            cat "$RUNNER_TEMP/rendered-$env.yaml" >> "$RUNNER_TEMP/rendered.yaml"
+            echo "---" >> "$RUNNER_TEMP/rendered.yaml"
+          done
       - name: Validate against Kubernetes schemas
         env:
           KUBECONFORM_VERSION: v0.7.0
@@ -247,13 +258,13 @@ jobs:
             for f in "${built[@]}"; do
               svc=$(basename "$f")
               if [[ "$svc" == "loadgen" ]]; then key='.loadgen.image.tag'; else key=".services.\"$svc\".image.tag"; fi
-              current=$(yq -r "$key" "$CHART/values.yaml")
+              current=$(yq -r "$key" "$DEV_VALUES")
               # Never move a tag backwards: skip if the deployed tag is already a newer commit than ours.
               if [[ "$current" != "$GITHUB_SHA" ]] && git merge-base --is-ancestor "$GITHUB_SHA" "$current" 2>/dev/null; then
                 echo "skip $svc: ${current::7} is newer than ${GITHUB_SHA::7}"
                 continue
               fi
-              yq -i "$key = \"${GITHUB_SHA}\"" "$CHART/values.yaml"
+              yq -i "$key = \"${GITHUB_SHA}\"" "$DEV_VALUES"
               echo "bumped $svc -> ${GITHUB_SHA::7}"
             done
           }
@@ -263,9 +274,9 @@ jobs:
             git fetch -q origin main
             git reset -q --hard origin/main
             bump
-            git add "$CHART/values.yaml"
+            git add "$DEV_VALUES"
             if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-            git commit -q -m "deploy: bump images to ${GITHUB_SHA::7} [skip ci]"
+            git commit -q -m "deploy(dev): bump images to ${GITHUB_SHA::7} [skip ci]"
             if git push -q origin HEAD:main; then git show --stat HEAD; exit 0; fi
             echo "push rejected (attempt $attempt), retrying"
             sleep $((attempt * 3))

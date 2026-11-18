@@ -1,6 +1,6 @@
 # dev: the cluster running today (adopted via moved.tf).
 # Its project ID says 'prod' because IDs can't be renamed; the display name can be.
-# When a real prod exists, change domain to "dev.bhumaji.com" and the apps path to "argocd/envs/dev".
+# When a real prod exists, change domain to "dev.bhumaji.com".
 
 locals {
   env        = "dev"
@@ -24,8 +24,8 @@ module "platform" {
 
   letsencrypt_email = "srinivas.bdn@gmail.com"
 
-  # ---- GitOps: which folder of this repo (jttadmin/jhanvi-trends-infra) this cluster's Argo CD syncs ----
-  gitops_apps_path       = "argocd/apps-gke"
+  # ---- GitOps: which folder of this repo (jttadmin/jhanvi-trends-gke) this cluster's Argo CD syncs ----
+  gitops_apps_path       = "argocd/envs/dev"
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token
 

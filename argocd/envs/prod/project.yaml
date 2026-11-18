@@ -1,0 +1,35 @@
+# Tenancy boundary for the store in prod: one repo, one namespace, no cluster-scoped objects
+# except the Namespace that CreateNamespace=true makes. Created before the app (sync-wave -1).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: jhanvi-trends
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  description: Jhanvi Trends store (prod)
+  sourceRepos:
+    - https://github.com/jttadmin/jhanvi-trends-gke.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: jhanvi-trends
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+  orphanedResources:
+    warn: true
+  # Change freeze: no automated syncs from Friday 18:00 to Monday 06:00 IST.
+  # Emergency fix during a freeze: sync by hand from the UI or CLI (manualSync: true allows it).
+  syncWindows:
+    - kind: deny
+      schedule: "30 12 * * 5"   # Friday 18:00 IST (cron is UTC)
+      duration: 60h
+      applications: ["*"]
+      manualSync: true
+      timeZone: UTC
