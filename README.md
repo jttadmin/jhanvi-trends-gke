@@ -1,8 +1,8 @@
 # jhanvi-trends-infra
 
-Terraform for the Jhanvi Trends store on **GKE**, with one reusable module and three environments, each in its own GCP project.
+The Jhanvi Trends store on **GKE**: the app (services, Helm chart, CI) and the Terraform that builds the cluster, with one reusable module and three environments, each in its own GCP project.
 
-The app code, Helm charts and Argo CD `Application` manifests live in [`jttadmin/Jhanvi-Trends`](https://github.com/jttadmin/Jhanvi-Trends). Each cluster's Argo CD syncs its own folder there.
+Each cluster's Argo CD syncs its own folder of **this repo** (dev: `argocd/apps-gke/`). The kubeadm-on-GCE version of the store lives separately in [`jttadmin/Jhanvi-Trends`](https://github.com/jttadmin/Jhanvi-Trends); the two repos don't depend on each other. App fixes need to be made in both if you want both setups to get them. Both push to the same Docker Hub images (`jhanviadmin/jhanvi-trends-<service>`), tagged by commit SHA, so neither overwrites the other's deployed tag.
 
 ## Layout
 
@@ -18,8 +18,14 @@ envs/
   stage/                     ready to apply later
   prod/                      ready to apply later, production sizing
 scripts/bootstrap-project.sh one-time project + state bucket setup per env
-examples/                    what to add to each service's chart in the app repo
-.github/workflows/           plan on PR per env; dev auto-applies, stage/prod need approval
+examples/                    instrumentation example for services
+services/                    the 8 microservices + loadgen (Dockerfile per service)
+deploy/charts/jhanvi-trends/ store Helm chart: values.yaml + values-gke.yaml
+argocd/apps-gke/             Argo CD Application for dev (synced by the root app)
+docs/APP.md                  app secret, checks
+.github/workflows/
+  terraform.yml              envs/** and modules/** only: plan on PR, dev auto-applies, stage/prod need approval
+  ci.yaml                    services/** and the chart: test, build, scan, push images, bump tags
 ```
 
 ## Environments
@@ -139,7 +145,9 @@ Under **Settings → Environments**, create `dev`, `stage` and `prod`, and add y
 
 > If you set `master_authorized_cidrs`, GitHub-hosted runners (random IPs) can't reach the cluster API for the Helm releases. Either leave it open, or use a self-hosted runner.
 
-## Changes needed in the app repo (kubeadm → GKE)
+## How the store chart differs from the kubeadm version
+
+These are already set in `deploy/charts/jhanvi-trends/values-gke.yaml`:
 
 1. **StorageClass:** replace `local-path` with `standard-rwo`, or omit it.
 2. **Node placement:**

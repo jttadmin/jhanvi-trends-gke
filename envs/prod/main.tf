@@ -23,7 +23,7 @@ module "platform" {
 
   letsencrypt_email = "srinivas.bdn@gmail.com"
 
-  # ---- GitOps: which folder of jttadmin/Jhanvi-Trends this cluster's Argo CD syncs ----
+  # ---- GitOps: which folder of jttadmin/jhanvi-trends-infra this cluster's Argo CD syncs ----
   gitops_apps_path       = "argocd/envs/prod"
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token

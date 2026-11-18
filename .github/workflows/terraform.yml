@@ -12,11 +12,15 @@ name: terraform
 # Repo secrets:
 #   GITOPS_REPO_TOKEN, ALERT_SLACK_WEBHOOK_URL (optional)
 
+# Only infrastructure changes run Terraform. App code, the store chart and the CI image-tag
+# bumps (services/**, deploy/**, argocd/**) are handled by ci.yaml and Argo CD instead.
 on:
   pull_request:
     branches: [main]
+    paths: ["envs/**", "modules/**", ".github/workflows/terraform.yml"]
   push:
     branches: [main]
+    paths: ["envs/**", "modules/**", ".github/workflows/terraform.yml"]
   workflow_dispatch:
 
 permissions:

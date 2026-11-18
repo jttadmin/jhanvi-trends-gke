@@ -3,7 +3,7 @@
 #   export TF_VAR_alert_slack_webhook_url=https://hooks.slack.com/services/...   (optional)
 
 variable "gitops_repo_token" {
-  description = "GitHub fine-grained PAT with read access to jttadmin/Jhanvi-Trends"
+  description = "GitHub fine-grained PAT with read access to jttadmin/jhanvi-trends-infra"
   type        = string
   sensitive   = true
 }

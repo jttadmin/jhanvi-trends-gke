@@ -1,0 +1,212 @@
+# Jhanvi Trends umbrella chart values.
+# CI updates services.<name>.image.tag after each image build (GitOps).
+
+global:
+  # Images are pushed by GitHub Actions to Docker Hub: docker.io/<namespace>/jhanvi-trends-<service>.
+  imageRegistry: docker.io/jhanviadmin
+  imagePrefix: jhanvi-trends-
+  imagePullPolicy: IfNotPresent
+  # e.g. [{name: dockerhub-pull}] for private Docker Hub repos or to avoid anonymous pull limits (see README)
+  imagePullSecrets: []
+  environment: dev
+  # Secret holding POSTGRES_PASSWORD, MONGODB_PASSWORD, JWT_SECRET (created by scripts/bootstrap.sh).
+  secretName: jhanvi-trends-secrets
+  tracesSampleRatio: "1.0"
+  # Where services send OTLP traces. Empty = node-local collector at <node IP>:4317 (kubeadm setup).
+  otlpEndpoint: ""
+ingress:
+  enabled: true
+  className: traefik
+  # Set to shop.<NODE_EXTERNAL_IP>.nip.io (or your own DNS name).
+  host: shop.bhumaji.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+  tls:
+    - hosts: [shop.bhumaji.com]
+      secretName: shop-tls
+# Pin workload groups to node pools, e.g. {workload: apps} / {workload: stateful} on GKE. Empty = anywhere.
+nodeSelectors:
+  services: {}   # microservices + loadgen
+  datastores: {} # postgres, mongodb, redis, kafka (+ kafka-exporter)
+monitoring:
+  serviceMonitors: true
+  prometheusRules: true
+  grafanaDashboards: true
+# Every entry becomes a Deployment + Service (+ ServiceMonitor; HPA and PDB when replicas > 1 or hpa.enabled).
+# Each service runs 1 pod and autoscales (hpa) to more when average CPU or memory passes 70% of its requests.
+# With hpa.enabled the HPA owns the pod count and replicas is ignored; set hpa.enabled: false to pin replicas.
+services:
+  frontend:
+    image: {tag: f3570491dd62613f56e398c02bb9c004cedd12bd}
+    runAsUser: 1000 # numeric UID of the node user
+    replicas: 2
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 100m, memory: 96Mi}
+      limits: {memory: 256Mi}
+    hpa: {enabled: true, minReplicas: 2, maxReplicas: 3, cpu: 70, memory: 70}
+    secretEnv: [JWT_SECRET]
+    env:
+      USER_SERVICE_URL: http://user-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      CART_SERVICE_URL: http://cart-service:8080
+      INVENTORY_SERVICE_URL: http://inventory-service:8080
+      ORDER_SERVICE_URL: http://order-service:8080
+  user-service:
+    image: {tag: f3570491dd62613f56e398c02bb9c004cedd12bd}
+    runAsUser: 1000 # numeric UID of the node user
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 256Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    database: users
+    secretEnv: [JWT_SECRET]
+    env:
+      # Accounts with these emails get the admin panel (comma-separated). Log out and in again after changing.
+      ADMIN_EMAILS: srinivas.bdn@gmail.com
+  catalog-service:
+    image: {tag: e4b55898c1b9ad7515568b4a6164e565aa878e59}
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 384Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    mongodb: catalog # MongoDB database name
+  cart-service:
+    image: {tag: e4b55898c1b9ad7515568b4a6164e565aa878e59}
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {memory: 128Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    env:
+      REDIS_ADDR: redis:6379
+  inventory-service:
+    image: {tag: e4b55898c1b9ad7515568b4a6164e565aa878e59}
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {memory: 128Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    database: inventory
+  order-service:
+    image: {tag: f3570491dd62613f56e398c02bb9c004cedd12bd}
+    replicas: 1
+    port: 8080
+    metricsPath: /actuator/prometheus
+    probes:
+      liveness: /actuator/health/liveness
+      readiness: /actuator/health/readiness
+      # Up to 5 minutes to start: the JVM plus the OpenTelemetry agent needs ~2.5 min on a busy e2-medium.
+      startupFailureThreshold: 60
+    resources:
+      # A larger CPU share makes the JVM start faster when the node is busy.
+      requests: {cpu: 300m, memory: 384Mi}
+      limits: {memory: 768Mi}
+    # Scales on CPU only: the JVM keeps the memory it takes, so memory says little about load.
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 2, cpu: 70}
+    database: orders
+    kafka: true
+    env:
+      INVENTORY_SERVICE_URL: http://inventory-service:8080
+      PAYMENT_SERVICE_URL: http://payment-service:8080
+  payment-service:
+    image: {tag: f3570491dd62613f56e398c02bb9c004cedd12bd}
+    runAsUser: 1000 # numeric UID of the node user
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    probes: {liveness: /healthz, readiness: /readyz}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {memory: 192Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    env:
+      PAYMENT_FAILURE_RATE: "0.05"
+      PAYMENT_LATENCY_MS: "150"
+  notification-service:
+    image: {tag: e4b55898c1b9ad7515568b4a6164e565aa878e59}
+    replicas: 1
+    port: 8080
+    metricsPath: /metrics
+    # Only a metrics server listens on HTTP; probe that.
+    probes: {liveness: /metrics, readiness: /metrics}
+    resources:
+      requests: {cpu: 50m, memory: 96Mi}
+      limits: {memory: 192Mi}
+    hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
+    kafka: true
+# Synthetic traffic so dashboards are never empty. Set enabled=false in production.
+loadgen:
+  enabled: true
+  image: {tag: e4b55898c1b9ad7515568b4a6164e565aa878e59}
+  users: 8
+  spawnRate: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 384Mi}
+# Datastores run in-cluster as single-replica StatefulSets on the default StorageClass
+# (local-path on a kubeadm cluster). Point the services elsewhere for production.
+postgres:
+  enabled: true
+  image: postgres:17-alpine
+  user: jhanvitrends # database login (no hyphens)
+  databases: [users, inventory, orders]
+  storage: 5Gi
+  storageClassName: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+# Valkey: BSD-licensed, Redis-protocol compatible fork (Redis 8 is RSAL/SSPL/AGPL).
+redis:
+  enabled: true
+  image: valkey/valkey:8.1-alpine
+  storage: 1Gi
+  storageClassName: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  exporter:
+    image: oliver006/redis_exporter:v1.80.0
+mongodb:
+  enabled: true
+  image: mongo:7.0 # 8.x cannot start on kernel 6.19+ (MongoDB SERVER-121912)
+  user: jhanvitrends # database login (no hyphens)
+  storage: 5Gi
+  storageClassName: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  exporter:
+    image: percona/mongodb_exporter:0.48.0
+# Single-node Kafka in KRaft mode (no ZooKeeper). Topic order-events is created by order-service.
+kafka:
+  enabled: true
+  image: apache/kafka:4.1.1
+  # Any base64 UUID; keep it stable once the volume has data.
+  clusterId: 5L6g3nShT-eMCtK--X86sw
+  storage: 5Gi
+  storageClassName: ""
+  resources:
+    requests: {cpu: 200m, memory: 768Mi}
+    limits: {memory: 1536Mi}
+  heapOpts: "-Xms512m -Xmx512m"
+  exporter:
+    image: danielqsj/kafka-exporter:v1.9.0

@@ -128,7 +128,7 @@ variable "letsencrypt_email" {
 # ---------- Argo CD / GitOps ----------
 variable "gitops_repo_url" {
   type    = string
-  default = "https://github.com/jttadmin/Jhanvi-Trends.git"
+  default = "https://github.com/jttadmin/jhanvi-trends-infra.git"
 }
 
 variable "gitops_repo_username" {
