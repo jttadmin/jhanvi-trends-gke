@@ -1,0 +1,120 @@
+# Promote image tags one environment up: dev -> stage, or stage -> prod.
+#
+# Copies services.<name>.image.tag (and loadgen.image.tag) from values-<from>.yaml to values-<to>.yaml,
+# renders the target environment with Helm, and opens a PR. Merging the PR is the deployment:
+# that cluster's Argo CD syncs it. Rollback = revert the PR.
+#
+# Run it from Actions -> promote -> Run workflow.
+# Needs: Settings -> Actions -> General -> "Allow GitHub Actions to create and approve pull requests".
+# Note: PRs opened with GITHUB_TOKEN don't trigger other workflows, so this job renders the chart itself.
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      to:
+        description: Environment to promote into (stage takes dev's tags, prod takes stage's tags)
+        type: choice
+        options: [stage, prod]
+        default: stage
+      services:
+        description: Comma-separated services to promote (empty = all), e.g. cart-service,order-service
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: promote-${{ inputs.to }}
+  cancel-in-progress: false
+
+env:
+  CHART: deploy/charts/jhanvi-trends
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+
+      - name: Copy tags
+        id: copy
+        env:
+          TO: ${{ inputs.to }}
+          ONLY: ${{ inputs.services }}
+        run: |
+          case "$TO" in
+            stage) FROM=dev ;;
+            prod)  FROM=stage ;;
+            *) echo "::error::unknown target $TO"; exit 1 ;;
+          esac
+          src="$CHART/values-$FROM.yaml"
+          dst="$CHART/values-$TO.yaml"
+          echo "from=$FROM" >> "$GITHUB_OUTPUT"
+
+          wanted() { [[ -z "$ONLY" ]] || [[ ",${ONLY// /}," == *",$1,"* ]]; }
+
+          summary="$RUNNER_TEMP/summary.md"
+          echo "| Service | $TO now | → from $FROM |" > "$summary"
+          echo "|---|---|---|" >> "$summary"
+          changed=0
+
+          copy() { # $1 = name shown, $2 = yq path
+            new=$(yq -r "$2" "$src")
+            old=$(yq -r "$2" "$dst")
+            if [[ "$new" == "null" || -z "$new" ]]; then echo "skip $1: no tag in $src"; return; fi
+            if [[ "$new" == "$old" ]]; then echo "same $1 (${new::7})"; return; fi
+            yq -i "$2 = \"$new\"" "$dst"
+            echo "| $1 | \`${old::7}\` | \`${new::7}\` |" >> "$summary"
+            changed=$((changed + 1))
+          }
+
+          for svc in $(yq -r '.services | keys | .[]' "$src"); do
+            wanted "$svc" && copy "$svc" ".services.\"$svc\".image.tag"
+          done
+          wanted loadgen && copy loadgen ".loadgen.image.tag"
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render the target environment
+        if: steps.copy.outputs.changed != '0'
+        run: |
+          helm lint "$CHART" -f "$CHART/values-gke.yaml" -f "$CHART/values-${{ inputs.to }}.yaml"
+          helm template jhanvi-trends "$CHART" -n jhanvi-trends \
+            -f "$CHART/values-gke.yaml" -f "$CHART/values-${{ inputs.to }}.yaml" > /dev/null
+
+      - name: Open the promotion PR
+        if: steps.copy.outputs.changed != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TO: ${{ inputs.to }}
+          FROM: ${{ steps.copy.outputs.from }}
+        run: |
+          branch="promote/$TO-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "jhanvi-trends-ci"
+          git config user.email "jhanvi-trends-ci@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$CHART/values-$TO.yaml"
+          git commit -q -m "deploy($TO): promote image tags from $FROM"
+          git push -q origin "$branch"
+          {
+            echo "Promotes image tags from **$FROM** to **$TO**. Merging this PR deploys it: the $TO cluster's Argo CD syncs \`argocd/envs/$TO\`."
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+            echo
+            echo "Rollback: revert this PR."
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base main --head "$branch" \
+            --title "deploy($TO): promote from $FROM (${{ steps.copy.outputs.changed }} images)" \
+            --body-file "$RUNNER_TEMP/body.md"
+
+      - name: Nothing to promote
+        if: steps.copy.outputs.changed == '0'
+        run: echo "values-${{ inputs.to }}.yaml already has the same tags as values-${{ steps.copy.outputs.from }}.yaml."

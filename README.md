@@ -1,8 +1,8 @@
-# jhanvi-trends-infra
+# jhanvi-trends-gke
 
 The Jhanvi Trends store on **GKE**: the app (services, Helm chart, CI) and the Terraform that builds the cluster, with one reusable module and three environments, each in its own GCP project.
 
-Each cluster's Argo CD syncs its own folder of **this repo** (dev: `argocd/apps-gke/`). The kubeadm-on-GCE version of the store lives separately in [`jttadmin/Jhanvi-Trends`](https://github.com/jttadmin/Jhanvi-Trends); the two repos don't depend on each other. App fixes need to be made in both if you want both setups to get them. Both push to the same Docker Hub images (`jhanviadmin/jhanvi-trends-<service>`), tagged by commit SHA, so neither overwrites the other's deployed tag.
+Each cluster's Argo CD syncs its own folder of **this repo** (`argocd/envs/<env>/`). The kubeadm-on-GCE version of the store, with its own full copy of the app, lives in [`jttadmin/jhanvi-trends-kubeadm`](https://github.com/jttadmin/jhanvi-trends-kubeadm); the two repos don't depend on each other. App fixes need to be made in both if you want both setups to get them. Both push to the same Docker Hub images (`jhanviadmin/jhanvi-trends-<service>`), tagged by commit SHA, so neither overwrites the other's deployed tag.
 
 ## Layout
 
@@ -20,12 +20,13 @@ envs/
 scripts/bootstrap-project.sh one-time project + state bucket setup per env
 examples/                    instrumentation example for services
 services/                    the 8 microservices + loadgen (Dockerfile per service)
-deploy/charts/jhanvi-trends/ store Helm chart: values.yaml + values-gke.yaml
-argocd/apps-gke/             Argo CD Application for dev (synced by the root app)
+deploy/charts/jhanvi-trends/ store Helm chart: values.yaml + values-gke.yaml + values-<env>.yaml (image tags)
+argocd/envs/<env>/           AppProject + Application per environment (synced by that cluster's root app)
 docs/APP.md                  app secret, checks
 .github/workflows/
   terraform.yml              envs/** and modules/** only: plan on PR, dev auto-applies, stage/prod need approval
-  ci.yaml                    services/** and the chart: test, build, scan, push images, bump tags
+  ci.yaml                    services/** and the chart: test, build, scan, push images, bump dev tags
+  promote.yaml               manual: opens a PR copying image tags dev -> stage or stage -> prod
 ```
 
 ## Environments
@@ -35,7 +36,8 @@ docs/APP.md                  app secret, checks
 | Status | **running** | not created yet | not created yet |
 | GCP project | `jhanvi-trends-prod-2611`¹ | `jhanvi-trends-stage-2611` | `jhanvi-trends-prd-2611` |
 | Hostnames | `*.bhumaji.com` (for now)² | `*.stage.bhumaji.com` | `*.bhumaji.com` |
-| Argo CD syncs | `argocd/apps-gke` | `argocd/envs/stage` | `argocd/envs/prod` |
+| Argo CD syncs | `argocd/envs/dev` | `argocd/envs/stage` | `argocd/envs/prod` |
+| Image tags | `values-dev.yaml`, bumped by CI | `values-stage.yaml`, promote PR | `values-prod.yaml`, promote PR |
 | Nodes | all Spot, scale to 0 | all Spot, scale to 0 | on-demand data tier, Spot apps |
 | Retention (metrics / logs / traces) | 3 / 3 / 3 days | 3 / 3 / 3 days | 15 / 14 / 7 days |
 | Deletion protection | off | off | **on** |
@@ -44,7 +46,7 @@ docs/APP.md                  app secret, checks
 ¹ Dev lives in the project created first. GCP project IDs can't be renamed, but you can change the display name:
 `gcloud projects update jhanvi-trends-prod-2611 --name="Jhanvi Trends dev"`
 
-² **Before creating prod**, free up the hostnames by moving dev. In `envs/dev/main.tf`, set `domain = "dev.bhumaji.com"` and `gitops_apps_path = "argocd/envs/dev"`, apply, and add `*.dev` A records in GoDaddy.
+² **Before creating prod**, free up the hostnames by moving dev. In `envs/dev/main.tf`, set `domain = "dev.bhumaji.com"`, apply, and add `*.dev` A records in GoDaddy.
 
 What's the same and what's different between environments is all in `envs/<env>/main.tf`. The module holds the logic, and each environment only holds its settings.
 
@@ -92,9 +94,23 @@ cd envs/stage && terraform init && terraform plan && terraform apply
 terraform output dns_records            # add these A records in GoDaddy
 ```
 
-In the app repo, create the matching Argo CD folder (`argocd/envs/stage`). Promotion between environments happens there, by changing image tags or Helm values per folder.
+The cluster's Argo CD syncs `argocd/envs/stage`, which deploys the chart with `values-stage.yaml`. See [Promoting a release](#promoting-a-release).
 
 **Cost:** GKE's free tier covers one zonal cluster's control plane per billing account. Each extra cluster adds about $2.40/day for its control plane, on top of its nodes.
+
+## Promoting a release
+
+```
+push to main ─▶ ci.yaml builds + scans ─▶ bumps values-dev.yaml ─▶ dev Argo CD syncs
+Actions ▸ promote ▸ to=stage ─▶ PR: values-dev tags → values-stage.yaml ─▶ merge ─▶ stage syncs
+Actions ▸ promote ▸ to=prod  ─▶ PR: values-stage tags → values-prod.yaml ─▶ merge ─▶ prod syncs
+```
+
+- The promote workflow can move all services or just some (`services: cart-service,order-service`).
+- Merging the PR *is* the deployment, so review and branch protection on `main` are the approval gate.
+- **Rollback:** revert the PR (or the CI bump commit for dev). Don't use Argo CD's Rollback button: auto-sync would undo it on the next reconcile.
+- Prod has a sync window: no automated syncs from Friday 18:00 to Monday 06:00 IST. An admin can still sync by hand for an emergency fix.
+- One-time: Settings → Actions → General → enable *Allow GitHub Actions to create and approve pull requests*.
 
 ## Observability (every environment)
 
@@ -116,7 +132,7 @@ Grafana https://grafana.<domain>   Prometheus https://prom.<domain> (basic auth)
 Do this per environment, once its project exists:
 
 ```bash
-ENV=dev; PROJECT=jhanvi-trends-prod-2611; REPO=jttadmin/jhanvi-trends-infra
+ENV=dev; PROJECT=jhanvi-trends-prod-2611; REPO=jttadmin/jhanvi-trends-gke
 gcloud iam service-accounts create tf-ci --project $PROJECT
 gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:tf-ci@$PROJECT.iam.gserviceaccount.com" --role=roles/owner
 gcloud iam workload-identity-pools create github --location=global --project $PROJECT

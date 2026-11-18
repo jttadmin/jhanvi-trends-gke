@@ -1,5 +1,6 @@
 # Jhanvi Trends umbrella chart values.
-# CI updates services.<name>.image.tag after each image build (GitOps).
+# Defaults only: each cluster layers values-gke.yaml and values-<env>.yaml on top, and the image tags that
+# actually deploy live in values-<env>.yaml (CI bumps values-dev.yaml; promote.yaml moves stage/prod).
 
 global:
   # Images are pushed by GitHub Actions to Docker Hub: docker.io/<namespace>/jhanvi-trends-<service>.

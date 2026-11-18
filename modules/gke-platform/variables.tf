@@ -128,7 +128,7 @@ variable "letsencrypt_email" {
 # ---------- Argo CD / GitOps ----------
 variable "gitops_repo_url" {
   type    = string
-  default = "https://github.com/jttadmin/jhanvi-trends-infra.git"
+  default = "https://github.com/jttadmin/jhanvi-trends-gke.git"
 }
 
 variable "gitops_repo_username" {
@@ -150,7 +150,7 @@ variable "gitops_target_revision" {
 variable "gitops_apps_path" {
   description = "Folder in the repo that holds your Argo CD Application manifests (app-of-apps)"
   type        = string
-  default     = "argocd/apps"
+  default     = "argocd/envs/dev"
 }
 
 # ---------- Chart versions (null = latest; pin them once things work) ----------

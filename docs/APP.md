@@ -1,8 +1,8 @@
 # The store app on GKE
 
-Terraform in this repo builds the GKE cluster, Traefik, cert-manager, Argo CD and the observability stack (Prometheus, Grafana, Loki, Tempo and the OTel gateway). Argo CD then syncs `argocd/apps-gke/` from this same repo, which deploys the store chart (`deploy/charts/jhanvi-trends`) with `values.yaml` + `values-gke.yaml`.
+Terraform in this repo builds the GKE cluster, Traefik, cert-manager, Argo CD and the observability stack (Prometheus, Grafana, Loki, Tempo and the OTel gateway). Argo CD then syncs `argocd/envs/<env>/` from this same repo: an AppProject (only the `jhanvi-trends` namespace, no cluster-scoped objects) and an Application that deploys the store chart (`deploy/charts/jhanvi-trends`) with `values.yaml` + `values-gke.yaml` + `values-<env>.yaml`.
 
-CI (`.github/workflows/ci.yaml`) builds the services that changed, pushes `jhanviadmin/jhanvi-trends-<service>:<commit>` and bumps the tags in `values.yaml`; Argo CD rolls them out. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+CI (`.github/workflows/ci.yaml`) builds the services that changed, pushes `jhanviadmin/jhanvi-trends-<service>:<commit>` and bumps the tags in `values-dev.yaml`; dev's Argo CD rolls them out. Stage and prod get new tags only through the promote workflow (see the README). It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
 
 ## One-time: app secret
 
