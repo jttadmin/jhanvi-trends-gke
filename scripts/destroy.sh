@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Tear an environment down completely and safely.
 #
-#   scripts/destroy.sh dev                 # keeps the static IP (DNS stays valid), ~₹20/day
+#   scripts/destroy.sh dev                 # keeps the static IP (DNS stays valid), ~₹20/day,
+#                                          # and the data: Prometheus, Grafana, Alertmanager,
+#                                          # Postgres, MongoDB disks + Loki/Tempo buckets + app secret
 #   scripts/destroy.sh dev --release-ip    # deletes the IP too (DNS must be updated on next up)
+#   scripts/destroy.sh dev --purge         # deletes the kept data too (metrics, dashboards, store data,
+#                                          # saved TLS certificates)
 #   ASSUME_YES=1 scripts/destroy.sh dev    # no prompts
 #
 # Safe to re-run: every step checks what's left and skips what's already gone.
@@ -17,29 +21,53 @@
 #   5. verify 0 VMs, 0 disks, 0 LB rules, and say so loudly
 source "$(dirname "$0")/lib.sh"
 
-RELEASE_IP=0
-for a in "${@:2}"; do [[ "$a" == --release-ip ]] && RELEASE_IP=1; done
+RELEASE_IP=0; PURGE=0
+for a in "${@:2}"; do
+  case "$a" in
+    --release-ip) RELEASE_IP=1 ;;
+    --purge)      PURGE=1 ;;
+    *) die "unknown option: $a (use --release-ip and/or --purge)" ;;
+  esac
+done
 
 load_env "${1:-}"
 require_tools
 start_log
 need_token optional
 warn_if_not_detached
-confirm "Destroy EVERYTHING in '$ENV' ($PROJECT)? Store data, metrics, logs, traces are deleted." || exit 1
+if [[ $PURGE == 1 ]]; then
+  confirm "Destroy EVERYTHING in '$ENV' ($PROJECT) INCLUDING kept data (metrics, dashboards, store data, logs, traces)?" || exit 1
+else
+  confirm "Destroy '$ENV' ($PROJECT)? Kept: static IP, data disks, Loki/Tempo buckets, app secret." || exit 1
+fi
+
+# up.sh writes this import block to re-adopt the kept IP; if an up.sh run failed
+# it can be left behind. Remove it so destroy can never import (and then delete)
+# the IP you meant to keep. up.sh recreates it when needed.
+rm -f "$ROOT/envs/$ENV/imports.auto.tf"
 
 tf_init
 clear_stale_lock
 
-# ---------- 1. keep the IP out of the destroy ----------
+# ---------- 1. keep the IP and the data out of the destroy ----------
 if [[ $RELEASE_IP == 0 ]] && in_state "$IP_ADDR"; then
   terraform state rm "$IP_ADDR" >/dev/null && ok "static IP removed from state (will be kept)"
 fi
+# Always taken out of state: they have prevent_destroy. With --purge they are deleted
+# with gcloud in step 5, once no VM has the disks attached.
+kept_state_addrs | while read -r r; do
+  terraform state rm "$r" >/dev/null && echo "    kept: $r"
+done || true
+[[ $PURGE == 0 ]] && ok "data disks and Loki/Tempo buckets removed from state (will be kept)"
 
 # ---------- 2. in-cluster cleanup while the cluster still exists ----------
 if cluster_exists; then
   log "cluster is up: cleaning Kubernetes-owned cloud resources first"
   kube_creds
   K="kubectl --context $CTX"
+
+  # Keep the TLS certificates so the next up.sh doesn't request new ones from Let's Encrypt
+  tls_backup || warn "TLS backup failed: the next up.sh will request new certificates"
 
   # Stop Argo CD from recreating anything we delete
   if $K get ns argocd >/dev/null 2>&1; then
@@ -66,7 +94,7 @@ if cluster_exists; then
   log "deleting PVCs (Kubernetes waits for their pods to stop, then deletes the disks)"
   $K delete pvc -A --all --wait=false >/dev/null 2>&1 || true
   for i in $(seq 1 36); do
-    n="$($K get pv --no-headers 2>/dev/null | grep -c . || true)"
+    n="$($K get pv --no-headers 2>/dev/null | grep -vc '^kept-' || true)"   # kept PVs stay (Retain)
     [[ "$n" == 0 ]] && break; sleep 5
   done
   [[ "${n:-0}" == 0 ]] && ok "all PVs/disks released" || warn "$n PV(s) still present: their disks are cleaned up in step 4"
@@ -121,24 +149,42 @@ else
   fi
 fi
 
-# ---------- 5. release the IP if asked ----------
+# ---------- 5. release the IP / purge kept data if asked ----------
 if [[ $RELEASE_IP == 1 ]] && ip_exists; then
   gcloud compute addresses delete "$IP_NAME" --region "$REGION" --project "$PROJECT" -q >/dev/null && ok "static IP released"
+fi
+if [[ $PURGE == 1 ]]; then
+  if [[ "$(vm_count)" != 0 ]]; then
+    warn "cluster VMs still shutting down: kept disks not deleted yet (re-run with --purge in a few minutes)"
+  else
+    kept_disks | while read -r name zone _; do
+      [[ -n "$name" ]] && gcloud compute disks delete "$name" --zone "$zone" --project "$PROJECT" -q >/dev/null && echo "    deleted kept disk $name"
+    done || true
+  fi
+  for b in "${KEPT_BUCKETS[@]}"; do
+    bucket_exists "$b" && gcloud storage rm -r "gs://$b" --quiet >/dev/null 2>&1 && echo "    deleted bucket $b"
+  done || true
+  gcloud secrets list --project "$PROJECT" --filter="labels.jt-kept=true" --format="value(name.basename())" 2>/dev/null \
+    | while read -r sec; do gcloud secrets delete "$sec" --project "$PROJECT" --quiet >/dev/null && echo "    deleted secret $sec"; done || true
+  rm -f "$IMPORT_FILE"
+  ok "kept data purged"
 fi
 
 # ---------- 6. verify ----------
 echo
 log "verification"
 vms="$(vm_count)"
-disks="$(gcloud compute disks list --project "$PROJECT" --format='value(name)' | grep -c . || true)"
+disks="$(gcloud compute disks list --project "$PROJECT" --filter='-labels.jt-kept=true' --format='value(name)' | grep -c . || true)"
+kept="$(kept_disks | awk '{print $3}' | paste -sd' ' -)"
 lbs="$(gcloud compute forwarding-rules list --project "$PROJECT" --format='value(name)' | grep -c . || true)"
 state="$(terraform state list 2>/dev/null | grep -c . || true)"
 ip="$(gcloud compute addresses list --project "$PROJECT" --format='value(address,status)' | head -1)"
 printf '    VMs: %s   disks: %s   LB rules: %s   terraform state items: %s\n' "$vms" "$disks" "$lbs" "$state"
 printf '    static IP: %s\n' "${ip:-none}"
+printf '    kept data disks: %s\n' "${kept:-none}"
 
 if [[ "$vms" == 0 && "$disks" == 0 && "$lbs" == 0 && "$state" == 0 ]]; then
-  ok "$ENV is fully destroyed: nothing is running or billing except the reserved IP${ip:+ ($ip)}"
+  ok "$ENV is fully destroyed: nothing is running; still billing: reserved IP${ip:+ ($ip)}${kept:+, kept disks}"
 else
   warn "NOT fully destroyed: re-run 'scripts/destroy.sh $ENV' (it continues where it stopped)"
   exit 1

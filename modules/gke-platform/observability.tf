@@ -81,6 +81,8 @@ resource "google_storage_bucket" "loki" {
     condition { age = var.logs_retention_days + 2 }
     action { type = "Delete" }
   }
+  # kept across destroy.sh (removed from state first); --purge deletes it with gcloud
+  lifecycle { prevent_destroy = true }
   depends_on = [google_project_service.apis]
 }
 
@@ -95,40 +97,46 @@ resource "google_storage_bucket" "tempo" {
     condition { age = var.traces_retention_days + 2 }
     action { type = "Delete" }
   }
+  # kept across destroy.sh (removed from state first); --purge deletes it with gcloud
+  lifecycle { prevent_destroy = true }
   depends_on = [google_project_service.apis]
 }
 
 # ---------- Workload Identity: KSA -> GSA -> bucket (no JSON keys) ----------
+locals {
+  # Static keys so for_each never depends on apply-time values
+  obs_components = toset(["loki", "tempo"])
+
+  obs_buckets = {
+    loki  = google_storage_bucket.loki.name
+    tempo = google_storage_bucket.tempo.name
+  }
+}
+
 resource "google_service_account" "obs" {
-  for_each     = toset(["loki", "tempo"])
+  for_each     = local.obs_components
   account_id   = "${var.cluster_name}-${each.key}"
   display_name = "${each.key} on ${var.cluster_name}"
 }
 
 resource "google_storage_bucket_iam_member" "obs" {
-  for_each = {
-    loki  = google_storage_bucket.loki.name
-    tempo = google_storage_bucket.tempo.name
-  }
-  bucket = each.value
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.obs[each.key].email}"
+  for_each = local.obs_buckets
+  bucket   = each.value
+  role     = "roles/storage.objectAdmin"
+  member   = "serviceAccount:${google_service_account.obs[each.key].email}"
 }
 
 # objectAdmin doesn't include storage.buckets.get, which Tempo/Loki call at startup
 resource "google_storage_bucket_iam_member" "obs_bucket_read" {
-  for_each = {
-    loki  = google_storage_bucket.loki.name
-    tempo = google_storage_bucket.tempo.name
-  }
-  bucket = each.value
-  role   = "roles/storage.legacyBucketReader"
-  member = "serviceAccount:${google_service_account.obs[each.key].email}"
+  for_each = local.obs_buckets
+  bucket   = each.value
+  role     = "roles/storage.legacyBucketReader"
+  member   = "serviceAccount:${google_service_account.obs[each.key].email}"
 }
 
 resource "google_service_account_iam_member" "obs_wi" {
-  for_each           = google_service_account.obs
-  service_account_id = each.value.name
+  for_each           = local.obs_components
+  service_account_id = google_service_account.obs[each.key].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${local.obs_ns}/${each.key}]"
   depends_on         = [google_container_cluster.this]
@@ -343,7 +351,8 @@ resource "helm_release" "kube_prometheus_stack" {
     }
   })]
 
-  depends_on = [google_container_node_pool.stateful, google_container_node_pool.apps]
+  # kept disks must exist as PVs before the chart creates its PVCs (see persistence.tf)
+  depends_on = [google_container_node_pool.stateful, google_container_node_pool.apps, kubernetes_persistent_volume_v1.kept]
 }
 
 # ---------- Loki (single binary, chunks in GCS) ----------
@@ -668,4 +677,20 @@ resource "helm_release" "observability_extras" {
     helm_release.traefik,
     kubernetes_secret_v1.prometheus_basic_auth,
   ]
+}
+
+# ---------- Jhanvi Trends dashboards (loaded by the Grafana sidecar) ----------
+# Put the dashboard JSON files in modules/gke-platform/dashboards/
+resource "kubernetes_config_map_v1" "dashboards" {
+  for_each = fileset("${path.module}/dashboards", "*.json")
+
+  metadata {
+    name        = "jt-dash-${trimsuffix(each.key, ".json")}"
+    namespace   = kubernetes_namespace_v1.observability.metadata[0].name
+    labels      = { grafana_dashboard = "1" }
+    annotations = { grafana_folder = "Jhanvi Trends" }
+  }
+  data = { (each.key) = file("${path.module}/dashboards/${each.key}") }
+
+  depends_on = [helm_release.kube_prometheus_stack]
 }
