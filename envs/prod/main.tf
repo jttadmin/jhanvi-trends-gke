@@ -28,6 +28,9 @@ module "platform" {
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token
 
+  # Argo CD tells GitHub when this env is deployed + smoke-tested, which opens the next promotion PR.
+  argocd_github_dispatch_token = var.argocd_github_dispatch_token
+
   # ---- production sizing: on-demand data tier, can't be deleted by accident ----
   deletion_protection = true
   stateful_use_spot   = false # databases + LGTM on regular VMs

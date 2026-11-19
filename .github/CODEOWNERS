@@ -1,0 +1,6 @@
+# Changes to production need a review from these owners once branch protection (or a ruleset) on main
+# has "Require review from Code Owners" turned on. Promotion PRs (promote.yaml) are opened by
+# github-actions, so the owner can approve them.
+/deploy/charts/jhanvi-trends/values-prod.yaml  @jttadmin
+/argocd/envs/prod/                              @jttadmin
+/envs/prod/                                     @jttadmin

@@ -26,7 +26,7 @@ docs/APP.md                  app secret, checks
 .github/workflows/
   terraform.yml              envs/** and modules/** only: plan on PR, dev auto-applies, stage/prod need approval
   ci.yaml                    services/** and the chart: test, build, scan, push images, bump dev tags
-  promote.yaml               manual: opens a PR copying image tags dev -> stage or stage -> prod
+  promote.yaml               opens a PR copying image tags dev -> stage or stage -> prod (automatic after a healthy deploy, or manual)
 ```
 
 ## Environments
@@ -100,17 +100,28 @@ The cluster's Argo CD syncs `argocd/envs/stage`, which deploys the chart with `v
 
 ## Promoting a release
 
+Build once, promote the same image: CI builds each image once, tagged with the commit SHA, and only Git changes after that.
+
 ```
-push to main ─▶ ci.yaml builds + scans ─▶ bumps values-dev.yaml ─▶ dev Argo CD syncs
-Actions ▸ promote ▸ to=stage ─▶ PR: values-dev tags → values-stage.yaml ─▶ merge ─▶ stage syncs
-Actions ▸ promote ▸ to=prod  ─▶ PR: values-stage tags → values-prod.yaml ─▶ merge ─▶ prod syncs
+push to main ─▶ ci.yaml: test, build, scan ─▶ bumps values-dev.yaml ─▶ dev Argo CD syncs
+   dev synced ─▶ PostSync smoke test passes ─▶ Argo CD notification ─▶ promote.yaml ─▶ PR: dev tags → values-stage.yaml
+ merge (auto if AUTO_MERGE_STAGE=true) ─▶ stage syncs ─▶ smoke test ─▶ notification ─▶ PR: stage tags → values-prod.yaml
+ code-owner approval + merge ─▶ prod syncs (outside the Friday-Monday freeze window)
 ```
 
-- The promote workflow can move all services or just some (`services: cart-service,order-service`).
-- Merging the PR *is* the deployment, so review and branch protection on `main` are the approval gate.
+- **Smoke test:** every sync ends with a PostSync Job (`templates/smoke-test.yaml`) that checks each service's readiness endpoint and the store API inside the cluster. If it fails, the sync is marked Failed and nothing gets promoted. Logs: `kubectl -n jhanvi-trends logs job/smoke-test`.
+- **Automatic promotion:** when an environment is synced, Healthy and smoke-tested, its Argo CD sends a `repository_dispatch` (`argocd-deployed`) to this repo, once per Git revision. `promote.yaml` reads the tags from *that exact commit*, so only what passed is promoted, even if `main` has moved on. Tags never move backwards.
+- **One open PR per target** (`promote/stage`, `promote/prod`): a newer promotion updates the open PR instead of opening another.
+- **Manual promotion** still works: Actions ▸ promote ▸ Run workflow (`to=stage|prod`, optional `services: cart-service,order-service`).
+- Merging the PR *is* the deployment. Prod PRs never merge themselves; `.github/CODEOWNERS` makes them need an owner's approval.
 - **Rollback:** revert the PR (or the CI bump commit for dev). Don't use Argo CD's Rollback button: auto-sync would undo it on the next reconcile.
 - Prod has a sync window: no automated syncs from Friday 18:00 to Monday 06:00 IST. An admin can still sync by hand for an emergency fix.
-- One-time: Settings → Actions → General → enable *Allow GitHub Actions to create and approve pull requests*.
+
+One-time setup:
+1. Settings → Actions → General → enable *Allow GitHub Actions to create and approve pull requests*.
+2. Create a fine-grained PAT with **Contents: read and write** on this repo only, save it as the repo secret `ARGOCD_DISPATCH_TOKEN`, and let `terraform.yml` apply (or `export TF_VAR_argocd_github_dispatch_token=...` locally). Without it nothing breaks: promotion is just manual.
+3. Optional: repo variable `AUTO_MERGE_STAGE=true` to merge dev → stage PRs automatically.
+4. To enforce the prod approval: a branch ruleset on `main` with *Require a pull request* + *Require review from Code Owners*, and **GitHub Actions** in its bypass list so CI can still push the dev tag bumps.
 
 ## Observability (every environment)
 

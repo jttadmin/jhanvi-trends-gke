@@ -10,7 +10,8 @@ name: terraform
 #   GCP_WIF_PROVIDER_<ENV>       e.g. GCP_WIF_PROVIDER_DEV
 #   GCP_TF_SERVICE_ACCOUNT_<ENV> e.g. GCP_TF_SERVICE_ACCOUNT_DEV
 # Repo secrets:
-#   GITOPS_REPO_TOKEN, ALERT_SLACK_WEBHOOK_URL (optional)
+#   GITOPS_REPO_TOKEN, ALERT_SLACK_WEBHOOK_URL (optional),
+#   ARGOCD_DISPATCH_TOKEN (optional: Argo CD deploy notifications -> automatic promotion PRs)
 
 # Only infrastructure changes run Terraform. App code, the store chart and the CI image-tag
 # bumps (services/**, deploy/**, argocd/**) are handled by ci.yaml and Argo CD instead.
@@ -32,6 +33,7 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_VAR_gitops_repo_token: ${{ secrets.GITOPS_REPO_TOKEN }}
   TF_VAR_alert_slack_webhook_url: ${{ secrets.ALERT_SLACK_WEBHOOK_URL }}
+  TF_VAR_argocd_github_dispatch_token: ${{ secrets.ARGOCD_DISPATCH_TOKEN }}
 
 jobs:
   checks:

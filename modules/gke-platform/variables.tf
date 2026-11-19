@@ -153,6 +153,18 @@ variable "gitops_apps_path" {
   default     = "argocd/envs/dev"
 }
 
+variable "argocd_github_dispatch_token" {
+  description = <<-EOT
+    GitHub fine-grained PAT with Contents: read and write on the GitOps repo. Argo CD uses it to send a
+    repository_dispatch "argocd-deployed" event when an app is synced, healthy and smoke-tested, which
+    starts the promotion to the next environment (.github/workflows/promote.yaml).
+    null = no notifications; promote by hand from the Actions tab.
+  EOT
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 # ---------- Chart versions (null = latest; pin them once things work) ----------
 variable "traefik_chart_version" {
   type    = string

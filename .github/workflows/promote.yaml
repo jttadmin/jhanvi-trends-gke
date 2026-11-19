@@ -1,10 +1,20 @@
 # Promote image tags one environment up: dev -> stage, or stage -> prod.
 #
 # Copies services.<name>.image.tag (and loadgen.image.tag) from values-<from>.yaml to values-<to>.yaml,
-# renders the target environment with Helm, and opens a PR. Merging the PR is the deployment:
-# that cluster's Argo CD syncs it. Rollback = revert the PR.
+# renders the target environment with Helm, and opens (or updates) a PR. Merging the PR is the
+# deployment: that cluster's Argo CD syncs it. Rollback = revert the PR.
 #
-# Run it from Actions -> promote -> Run workflow.
+# Two ways in:
+#   1. Automatic: when an environment is synced, Healthy and its PostSync smoke test passed, that
+#      cluster's Argo CD sends a repository_dispatch "argocd-deployed" event (modules/gke-platform/addons.tf).
+#      dev deployed -> PR to stage, stage deployed -> PR to prod. The tags are read from the exact commit
+#      Argo CD deployed, so only what passed is promoted, even if main has moved on since.
+#   2. Manual: Actions -> promote -> Run workflow (reads the tags from the tip of main).
+#
+# Only one PR per target is kept open (branch promote/<to>); newer promotions update it.
+# Stage PRs merge themselves when the repo variable AUTO_MERGE_STAGE is "true". Prod PRs never do:
+# they need an approval from the code owners (.github/CODEOWNERS) when branch protection requires it.
+#
 # Needs: Settings -> Actions -> General -> "Allow GitHub Actions to create and approve pull requests".
 # Note: PRs opened with GITHUB_TOKEN don't trigger other workflows, so this job renders the chart itself.
 name: promote
@@ -21,13 +31,16 @@ on:
         description: Comma-separated services to promote (empty = all), e.g. cart-service,order-service
         type: string
         default: ""
+  repository_dispatch:
+    types: [argocd-deployed]
 
 permissions:
   contents: write
   pull-requests: write
 
+# One promotion per target environment at a time (dev events -> stage, stage events -> prod).
 concurrency:
-  group: promote-${{ inputs.to }}
+  group: promote-${{ inputs.to || (github.event.client_payload.env == 'dev' && 'stage' || 'prod') }}
   cancel-in-progress: false
 
 env:
@@ -35,28 +48,61 @@ env:
 
 jobs:
   promote:
+    # prod is the last environment, so a prod "deployed" event has nothing to promote.
+    if: github.event_name == 'workflow_dispatch' || contains(fromJSON('["dev","stage"]'), github.event.client_payload.env)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
+          fetch-depth: 0 # needed to read the deployed commit and to compare tag ages
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+
+      # Payload values go through env vars, never straight into the script, and are validated here.
+      - name: Work out source, target and revision
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TO: ${{ inputs.to }}
+          DEPLOYED_ENV: ${{ github.event.client_payload.env }}
+          DEPLOYED_REV: ${{ github.event.client_payload.revision }}
+        run: |
+          if [[ "$EVENT" == "repository_dispatch" ]]; then
+            case "$DEPLOYED_ENV" in
+              dev)   TO=stage ;;
+              stage) TO=prod ;;
+              *) echo "::error::unexpected env '$DEPLOYED_ENV'"; exit 1 ;;
+            esac
+            if [[ ! "$DEPLOYED_REV" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::bad revision '$DEPLOYED_REV'"; exit 1; fi
+            if ! git merge-base --is-ancestor "$DEPLOYED_REV" origin/main 2>/dev/null; then
+              echo "::error::$DEPLOYED_REV is not a commit on main; refusing to promote it"; exit 1
+            fi
+            REV="$DEPLOYED_REV"
+            echo "$DEPLOYED_ENV is deployed and healthy at ${REV::7}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            TO="$INPUT_TO"
+            REV=$(git rev-parse origin/main)
+          fi
+          case "$TO" in
+            stage) FROM=dev ;;
+            prod)  FROM=stage ;;
+            *) echo "::error::unknown target '$TO'"; exit 1 ;;
+          esac
+          { echo "to=$TO"; echo "from=$FROM"; echo "rev=$REV"; } >> "$GITHUB_OUTPUT"
 
       - name: Copy tags
         id: copy
         env:
-          TO: ${{ inputs.to }}
+          TO: ${{ steps.plan.outputs.to }}
+          FROM: ${{ steps.plan.outputs.from }}
+          REV: ${{ steps.plan.outputs.rev }}
           ONLY: ${{ inputs.services }}
         run: |
-          case "$TO" in
-            stage) FROM=dev ;;
-            prod)  FROM=stage ;;
-            *) echo "::error::unknown target $TO"; exit 1 ;;
-          esac
-          src="$CHART/values-$FROM.yaml"
+          src="$RUNNER_TEMP/values-$FROM.yaml"
           dst="$CHART/values-$TO.yaml"
-          echo "from=$FROM" >> "$GITHUB_OUTPUT"
+          # The source tags come from the commit that was deployed (or main for a manual run).
+          git show "$REV:$CHART/values-$FROM.yaml" > "$src"
 
           wanted() { [[ -z "$ONLY" ]] || [[ ",${ONLY// /}," == *",$1,"* ]]; }
 
@@ -68,8 +114,12 @@ jobs:
           copy() { # $1 = name shown, $2 = yq path
             new=$(yq -r "$2" "$src")
             old=$(yq -r "$2" "$dst")
-            if [[ "$new" == "null" || -z "$new" ]]; then echo "skip $1: no tag in $src"; return; fi
+            if [[ "$new" == "null" || -z "$new" ]]; then echo "skip $1: no tag in values-$FROM.yaml"; return; fi
             if [[ "$new" == "$old" ]]; then echo "same $1 (${new::7})"; return; fi
+            # Never move a tag backwards (e.g. a late event for an older dev deploy).
+            if git merge-base --is-ancestor "$new" "$old" 2>/dev/null; then
+              echo "skip $1: $TO already runs ${old::7}, newer than ${new::7}"; return
+            fi
             yq -i "$2 = \"$new\"" "$dst"
             echo "| $1 | \`${old::7}\` | \`${new::7}\` |" >> "$summary"
             changed=$((changed + 1))
@@ -85,36 +135,60 @@ jobs:
 
       - name: Render the target environment
         if: steps.copy.outputs.changed != '0'
+        env:
+          TO: ${{ steps.plan.outputs.to }}
         run: |
-          helm lint "$CHART" -f "$CHART/values-gke.yaml" -f "$CHART/values-${{ inputs.to }}.yaml"
+          helm lint "$CHART" -f "$CHART/values-gke.yaml" -f "$CHART/values-$TO.yaml"
           helm template jhanvi-trends "$CHART" -n jhanvi-trends \
-            -f "$CHART/values-gke.yaml" -f "$CHART/values-${{ inputs.to }}.yaml" > /dev/null
+            -f "$CHART/values-gke.yaml" -f "$CHART/values-$TO.yaml" > /dev/null
 
-      - name: Open the promotion PR
+      - name: Open or update the promotion PR
         if: steps.copy.outputs.changed != '0'
         env:
           GH_TOKEN: ${{ github.token }}
-          TO: ${{ inputs.to }}
-          FROM: ${{ steps.copy.outputs.from }}
+          TO: ${{ steps.plan.outputs.to }}
+          FROM: ${{ steps.plan.outputs.from }}
+          REV: ${{ steps.plan.outputs.rev }}
+          CHANGED: ${{ steps.copy.outputs.changed }}
+          TRIGGER: ${{ github.event_name == 'repository_dispatch' && 'automatic, after Argo CD reported it deployed, healthy and smoke-tested' || format('manual run by {0}', github.actor) }}
+          AUTO_MERGE_STAGE: ${{ vars.AUTO_MERGE_STAGE }}
         run: |
-          branch="promote/$TO-$(date -u +%Y%m%d-%H%M%S)"
+          branch="promote/$TO"
+          title="deploy($TO): promote from $FROM ($CHANGED images, ${REV::7})"
           git config user.name "jhanvi-trends-ci"
           git config user.email "jhanvi-trends-ci@users.noreply.github.com"
-          git switch -c "$branch"
+          git switch -C "$branch"
           git add "$CHART/values-$TO.yaml"
-          git commit -q -m "deploy($TO): promote image tags from $FROM"
-          git push -q origin "$branch"
+          git commit -q -m "$title"
+          # One PR per target: replace the branch so the open PR always shows the latest promotion.
+          git push -q --force origin "$branch"
           {
-            echo "Promotes image tags from **$FROM** to **$TO**. Merging this PR deploys it: the $TO cluster's Argo CD syncs \`argocd/envs/$TO\`."
+            echo "Promotes image tags from **$FROM** (as deployed at \`${REV::7}\`) to **$TO**."
+            echo "Merging this PR deploys it: the $TO cluster's Argo CD syncs \`argocd/envs/$TO\`."
+            echo
+            echo "Trigger: $TRIGGER."
             echo
             cat "$RUNNER_TEMP/summary.md"
             echo
             echo "Rollback: revert this PR."
           } > "$RUNNER_TEMP/body.md"
-          gh pr create --base main --head "$branch" \
-            --title "deploy($TO): promote from $FROM (${{ steps.copy.outputs.changed }} images)" \
-            --body-file "$RUNNER_TEMP/body.md"
+
+          pr=$(gh pr list --head "$branch" --base main --state open --json number -q '.[0].number')
+          if [[ -n "$pr" ]]; then
+            gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated PR #$pr" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            pr=$(gh pr list --head "$branch" --base main --state open --json number -q '.[0].number')
+            echo "Opened PR #$pr" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Prod always waits for a human. Stage can merge itself when AUTO_MERGE_STAGE=true.
+          if [[ "$TO" == "stage" && "$AUTO_MERGE_STAGE" == "true" ]]; then
+            gh pr merge "$pr" --squash --delete-branch
+            echo "Auto-merged PR #$pr into main (AUTO_MERGE_STAGE=true)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Nothing to promote
         if: steps.copy.outputs.changed == '0'
-        run: echo "values-${{ inputs.to }}.yaml already has the same tags as values-${{ steps.copy.outputs.from }}.yaml."
+        run: echo "values-${{ steps.plan.outputs.to }}.yaml already has the tags from values-${{ steps.plan.outputs.from }}.yaml at ${{ steps.plan.outputs.rev }}." | tee -a "$GITHUB_STEP_SUMMARY"
