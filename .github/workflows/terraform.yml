@@ -75,17 +75,37 @@ jobs:
       - uses: actions/checkout@v4
       - id: upper
         run: echo "env=$(echo '${{ matrix.env }}' | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
-      - uses: google-github-actions/auth@v2
+      # Skip (green, with a notice) until this env's Workload Identity variables exist, instead of failing.
+      - id: cfg
+        env:
+          WIF: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
+          SA: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
+          ENV_UPPER: ${{ steps.upper.outputs.env }}
+        run: |
+          if [[ -n "$WIF" && -n "$SA" ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            msg="Terraform plan skipped for ${{ matrix.env }}: set repo variables GCP_WIF_PROVIDER_${ENV_UPPER} and GCP_TF_SERVICE_ACCOUNT_${ENV_UPPER} (Settings -> Secrets and variables -> Actions -> Variables)."
+            echo "::notice::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.cfg.outputs.ok == 'true'
+        uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
           service_account: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - uses: hashicorp/setup-terraform@v3
+      - if: steps.cfg.outputs.ok == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.cfg.outputs.ok == 'true'
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
-      - run: terraform init -input=false
+      - if: steps.cfg.outputs.ok == 'true'
+        run: terraform init -input=false
       - id: plan
+        if: steps.cfg.outputs.ok == 'true'
         run: |
           set +e
           terraform plan -input=false -lock-timeout=5m -detailed-exitcode -out=tfplan > plan.txt 2>&1
@@ -94,7 +114,7 @@ jobs:
           echo "exitcode=$code" >> "$GITHUB_OUTPUT"
           [ "$code" -eq 1 ] && exit 1 || exit 0
       - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
+        if: steps.cfg.outputs.ok == 'true' && (github.event_name == 'pull_request')
         uses: actions/github-script@v7
         with:
           script: |
@@ -107,7 +127,7 @@ jobs:
               body: "### Terraform plan: `${{ matrix.env }}`\n```\n" + plan + "\n```"
             });
       - uses: actions/upload-artifact@v4
-        if: github.ref == 'refs/heads/main' && steps.plan.outputs.exitcode == '2'
+        if: steps.cfg.outputs.ok == 'true' && (github.ref == 'refs/heads/main' && steps.plan.outputs.exitcode == '2')
         with:
           name: tfplan-${{ matrix.env }}
           path: envs/${{ matrix.env }}/tfplan
