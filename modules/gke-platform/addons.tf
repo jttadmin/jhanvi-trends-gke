@@ -92,7 +92,7 @@ resource "helm_release" "argocd" {
   namespace        = "argocd"
   create_namespace = true
 
-  values = [yamlencode({
+  values = concat([yamlencode({
     global = {
       domain = var.argocd_host
     }
@@ -121,9 +121,61 @@ resource "helm_release" "argocd" {
         tls = true
       }
     }
-  })]
+  })], local.argocd_notifications_values)
 
   depends_on = [helm_release.traefik]
+}
+
+# ---------- Argo CD notifications -> GitHub (automatic promotion) ----------
+# When an Application subscribed to "on-deployed-dispatch" (argocd/envs/<env>/jhanvi-trends.yaml) has
+# finished a sync that Succeeded (PostSync smoke test included) and is Healthy, Argo CD POSTs a
+# repository_dispatch event to GitHub, once per Git revision. promote.yaml turns it into a PR to the
+# next environment. Skipped entirely while argocd_github_dispatch_token is null.
+locals {
+  github_repo_slug = trimsuffix(trimprefix(var.gitops_repo_url, "https://github.com/"), ".git")
+
+  # An unset GitHub secret arrives as "", so treat empty the same as null.
+  argocd_dispatch_enabled = var.argocd_github_dispatch_token != null && var.argocd_github_dispatch_token != ""
+
+  argocd_notifications_values = local.argocd_dispatch_enabled ? [yamlencode({
+    notifications = {
+      enabled = true
+      secret = {
+        items = {
+          github-dispatch-token = var.argocd_github_dispatch_token
+        }
+      }
+      notifiers = {
+        "service.webhook.github-dispatch" = <<-EOT
+          url: https://api.github.com/repos/${local.github_repo_slug}/dispatches
+          headers:
+            - name: Authorization
+              value: Bearer $github-dispatch-token
+            - name: Accept
+              value: application/vnd.github+json
+            - name: X-GitHub-Api-Version
+              value: "2022-11-28"
+        EOT
+      }
+      templates = {
+        "template.github-dispatch-deployed" = <<-EOT
+          webhook:
+            github-dispatch:
+              method: POST
+              body: |
+                {"event_type": "argocd-deployed", "client_payload": {"env": "{{index .app.metadata.labels "env"}}", "app": "{{.app.metadata.name}}", "revision": "{{.app.status.operationState.syncResult.revision}}"}}
+        EOT
+      }
+      triggers = {
+        "trigger.on-deployed-dispatch" = <<-EOT
+          - description: App synced (PostSync smoke test passed) and healthy
+            when: app.status.operationState != nil and app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+            oncePer: app.status.operationState?.syncResult?.revision
+            send: [github-dispatch-deployed]
+        EOT
+      }
+    }
+  })] : []
 }
 
 # ---------- Private repo credentials for Argo CD ----------

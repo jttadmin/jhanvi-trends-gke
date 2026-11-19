@@ -29,6 +29,9 @@ module "platform" {
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token
 
+  # Argo CD tells GitHub when this env is deployed + smoke-tested, which opens the next promotion PR.
+  argocd_github_dispatch_token = var.argocd_github_dispatch_token
+
   # ---- practice sizing: everything on Spot, scales to zero ----
   stateful_use_spot  = true
   stateful_min_nodes = 0

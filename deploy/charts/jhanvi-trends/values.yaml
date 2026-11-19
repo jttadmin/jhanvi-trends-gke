@@ -152,6 +152,12 @@ services:
       limits: {memory: 192Mi}
     hpa: {enabled: true, minReplicas: 1, maxReplicas: 3, cpu: 70, memory: 70}
     kafka: true
+# Post-deploy smoke test (templates/smoke-test.yaml): an Argo CD PostSync Job that must pass before
+# an environment counts as deployed and can be promoted to the next one.
+smokeTest:
+  enabled: true
+  image: curlimages/curl:8.11.1
+  timeoutSeconds: 600
 # Synthetic traffic so dashboards are never empty. Set enabled=false in production.
 loadgen:
   enabled: true

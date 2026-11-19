@@ -11,8 +11,13 @@ kind: Application
 metadata:
   name: jhanvi-trends
   namespace: argocd
+  labels:
+    env: dev # read by the Argo CD notification that starts the next promotion
   annotations:
     argocd.argoproj.io/sync-wave: "0"
+    # When this env is synced, healthy and its smoke test passed, tell GitHub (repository_dispatch).
+    # promote.yaml then opens the PR to the next environment. Configured in modules/gke-platform/addons.tf.
+    notifications.argoproj.io/subscribe.on-deployed-dispatch.github-dispatch: ""
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
