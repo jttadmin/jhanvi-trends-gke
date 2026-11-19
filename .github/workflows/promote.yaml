@@ -57,7 +57,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0 # needed to read the deployed commit and to compare tag ages
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
 
       # Payload values go through env vars, never straight into the script, and are validated here.
       - name: Work out source, target and revision
