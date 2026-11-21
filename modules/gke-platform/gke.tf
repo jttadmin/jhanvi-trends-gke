@@ -89,6 +89,11 @@ resource "google_container_cluster" "this" {
   }
 
   # 02:00 IST daily
+  # GKE cost allocation: splits the bill by namespace and label in the billing export (free).
+  cost_management_config {
+    enabled = true
+  }
+
   maintenance_policy {
     daily_maintenance_window {
       start_time = "20:30"

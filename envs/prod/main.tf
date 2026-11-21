@@ -46,6 +46,11 @@ module "platform" {
   metrics_retention_days  = 15
   logs_retention_days     = 14
   traces_retention_days   = 7
+
+  # ---- backups (longer history in prod) ----
+  snapshot_retention_days = 14
+  backup_retention_days   = 30
+
   alert_slack_webhook_url = var.alert_slack_webhook_url
   alert_slack_channel     = "#jhanvi-alerts-prod"
 }
