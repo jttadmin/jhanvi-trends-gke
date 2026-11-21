@@ -5,7 +5,8 @@ const uniqueEmail = () => `e2e-${Date.now()}-${Math.random().toString(36).slice(
 
 test('home page lists products and categories', async ({ page }) => {
   await page.goto('/#/');
-  await expect(page.locator('#app .card .title').first()).toBeVisible();
+  // First page load of a run: browsers, TLS and the catalog are cold, so allow more time once.
+  await expect(page.locator('#app .card .title').first()).toBeVisible({ timeout: 45_000 });
   expect(await page.locator('#app .card .title').count()).toBeGreaterThan(3);
   await expect(page.locator('#subnav a').nth(1)).toBeVisible(); // first real category after "All"
 });
