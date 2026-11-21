@@ -4,7 +4,7 @@ WORKDIR /src
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 
-# Compiles, runs the unit tests (src/test/java) with JaCoCo coverage, then SpotBugs and PMD (all bound to verify).
+# Compiles, runs the unit tests (src/test/java) with JaCoCo coverage, then SpotBugs (all bound to verify).
 # CI runs this before building the image.
 FROM deps AS test
 COPY spotbugs-exclude.xml ./

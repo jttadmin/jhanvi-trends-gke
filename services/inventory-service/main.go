@@ -253,7 +253,7 @@ func migrate(ctx context.Context, db *pgxpool.Pool, log *slog.Logger) {
 			var n int
 			if err := db.QueryRow(ctx, "SELECT count(*) FROM stock").Scan(&n); err == nil && n == 0 {
 				for id := 1; id <= 24; id++ {
-					_, _ = db.Exec(ctx, "INSERT INTO stock (product_id, available) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, 25+rand.IntN(200))
+					_, _ = db.Exec(ctx, "INSERT INTO stock (product_id, available) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, 25+rand.IntN(200)) //nolint:gosec // G404: demo stock quantities, not security-sensitive
 				}
 				log.Info("seeded demo stock")
 			}
@@ -308,7 +308,7 @@ func main() {
 	if shutdown, err := initTracing(ctx); err != nil {
 		log.Warn("tracing disabled", "error", err.Error())
 	} else {
-		defer shutdown(context.Background())
+		defer func() { _ = shutdown(context.Background()) }()
 	}
 
 	cfg, err := pgxpool.ParseConfig(fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s pool_max_conns=10",

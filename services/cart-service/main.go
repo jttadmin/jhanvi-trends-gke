@@ -167,7 +167,7 @@ func main() {
 	if err != nil {
 		log.Warn("tracing disabled", "error", err.Error())
 	} else {
-		defer shutdownTracing(context.Background())
+		defer func() { _ = shutdownTracing(context.Background()) }()
 	}
 
 	rdb := redis.NewClient(&redis.Options{
