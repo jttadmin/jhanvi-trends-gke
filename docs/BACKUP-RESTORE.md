@@ -5,7 +5,7 @@ Two independent layers. Losing one never loses the other.
 | | Disk snapshots | Logical dumps |
 |---|---|---|
 | What | Whole persistent disks: Postgres, MongoDB, Grafana | `pg_dumpall` + `mongodump` |
-| When | Daily 21:00 UTC (02:30 IST) | Daily 20:30 UTC (02:00 IST) |
+| When | Daily 21:00 UTC (02:30 IST), **off in dev** (`enable_snapshot_schedule = false`) | Daily 20:30 UTC (02:00 IST) |
 | Kept | 7 days (prod 14) | 14 days (prod 30), plus 7 days of soft delete |
 | Where | Compute Engine snapshots, same region | GCS bucket `<project>-jhanvi-trends-gke-backups` |
 | Made by | Terraform snapshot schedule (`modules/gke-platform/backups.tf`) | CronJobs in the store chart (`templates/backups.yaml`) |
