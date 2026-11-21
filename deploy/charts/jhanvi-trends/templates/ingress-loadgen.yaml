@@ -5,9 +5,14 @@ metadata:
   name: jhanvi-trends
   labels:
     {{- include "jhanvi-trends.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- if or .Values.ingress.annotations .Values.edgeSecurity.enabled }}
   annotations:
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.edgeSecurity.enabled }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%[1]s-security-headers@kubernetescrd,%[1]s-rate-limit@kubernetescrd" .Release.Namespace }}
+    {{- end }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}

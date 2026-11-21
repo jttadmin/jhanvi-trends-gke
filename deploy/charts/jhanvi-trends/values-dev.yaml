@@ -33,3 +33,9 @@ loadgen:
   enabled: true
   image:
     tag: ad658e0304188348e84d802bec4cc26de59f405b
+
+# Nightly database dumps (bucket + service account created by Terraform: `terraform output backups`).
+backups:
+  enabled: true
+  bucket: jhanvi-trends-prod-2611-jhanvi-trends-gke-backups
+  gcpServiceAccount: jhanvi-trends-gke-db-backup@jhanvi-trends-prod-2611.iam.gserviceaccount.com

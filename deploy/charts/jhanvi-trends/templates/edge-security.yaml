@@ -1,0 +1,82 @@
+{{- /*
+Edge protection at Traefik (Middleware CRDs, referenced from the store Ingress):
+  - security-headers: HSTS, nosniff, no framing, referrer and permissions policy
+  - rate-limit:       per client IP for the whole store (client IPs are real: Traefik runs with
+                      externalTrafficPolicy Local)
+  - auth-rate-limit:  much stricter per client IP for /api/auth (login / register brute force),
+                      applied by a second Ingress on that path (the longest path wins in Traefik)
+Load tests from one machine count as one client: raise edgeSecurity.rateLimit for big stress runs,
+or run them through `kubectl port-forward` (BASE_URL=http://localhost:8080), which skips Traefik.
+*/ -}}
+{{- if and .Values.ingress.enabled .Values.edgeSecurity.enabled }}
+{{- $e := .Values.edgeSecurity }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: false # bhumaji.com hosts other sites; only this host gets HSTS
+    forceSTSHeader: true
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: strict-origin-when-cross-origin
+    permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+    customResponseHeaders:
+      X-Powered-By: "" # don't advertise Express
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  rateLimit:
+    average: {{ $e.rateLimit.average }}
+    burst: {{ $e.rateLimit.burst }}
+    period: 1s
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: auth-rate-limit
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  rateLimit:
+    average: {{ $e.authRateLimit.average }}
+    burst: {{ $e.authRateLimit.burst }}
+    period: 1s
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jhanvi-trends-auth
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+  annotations:
+    # No cert-manager annotation here: the main Ingress owns the certificate, this one reuses its secret.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%[1]s-security-headers@kubernetescrd,%[1]s-auth-rate-limit@kubernetescrd" .Release.Namespace }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . }}
+      {{- end }}
+      http:
+        paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port: { name: http }
+{{- end }}

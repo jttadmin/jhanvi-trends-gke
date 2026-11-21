@@ -26,3 +26,9 @@ redis:
   storageClassName: standard-rwo
 kafka:
   storageClassName: standard-rwo
+
+# Default-deny NetworkPolicies (enforced by GKE Dataplane V2) and Traefik security headers + rate limits.
+networkPolicies:
+  enabled: true
+edgeSecurity:
+  enabled: true

@@ -1,0 +1,129 @@
+{{- /*
+NetworkPolicies (ingress): every pod in the namespace denies incoming traffic by default, then each
+service is opened only to the pods that really call it. Enforced by GKE Dataplane V2.
+
+  Traefik (ingress ns) ──▶ frontend ──▶ user / catalog / cart / inventory / order
+                                         order ──▶ inventory, payment
+  user, inventory, order ──▶ postgres     catalog ──▶ mongodb     cart ──▶ redis
+  order, notification, kafka-exporter ──▶ kafka
+  db-backup ──▶ postgres, mongodb
+  observability ns ──▶ metrics ports (Prometheus scrapes)        smoke-test ──▶ every service
+
+Kubelet health probes come from the node and are not affected. Egress is not restricted.
+*/ -}}
+{{- if .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $np.monitoringNamespace }} }
+      ports:
+        - { port: 8080 } # services: /metrics, /actuator/prometheus
+        - { port: 9187 } # postgres-exporter
+        - { port: 9216 } # mongodb_exporter
+        - { port: 9121 } # redis_exporter
+        - { port: 9308 } # kafka-exporter
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: frontend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $np.ingressNamespace }} }
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: loadgen }
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: smoke-test }
+      ports:
+        - { port: 8080 }
+{{- /* service -> who may call it on 8080 */ -}}
+{{- $callers := dict
+      "user-service"         (list "frontend")
+      "catalog-service"      (list "frontend")
+      "cart-service"         (list "frontend")
+      "inventory-service"    (list "frontend" "order-service")
+      "order-service"        (list "frontend")
+      "payment-service"      (list "order-service")
+      "notification-service" (list) }}
+{{- range $svc, $from := $callers }}
+{{- if hasKey $.Values.services $svc }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "jhanvi-trends.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: {{ $svc }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $from }}
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: {{ . }} }
+        {{- end }}
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: smoke-test }
+      ports:
+        - { port: 8080 }
+{{- end }}
+{{- end }}
+{{- /* datastore -> port, callers */ -}}
+{{- $stores := list
+      (dict "name" "postgres" "enabled" .Values.postgres.enabled "port" 5432 "from" (list "user-service" "inventory-service" "order-service" "db-backup"))
+      (dict "name" "mongodb"  "enabled" .Values.mongodb.enabled  "port" 27017 "from" (list "catalog-service" "db-backup"))
+      (dict "name" "redis"    "enabled" .Values.redis.enabled    "port" 6379 "from" (list "cart-service"))
+      (dict "name" "kafka"    "enabled" .Values.kafka.enabled    "port" 9092 "from" (list "order-service" "notification-service" "kafka-exporter" "kafka")) }}
+{{- range $stores }}
+{{- if .enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "jhanvi-trends.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: {{ .name }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range .from }}
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: {{ . }} }
+        {{- end }}
+      ports:
+        - { port: {{ .port }} }
+{{- end }}
+{{- end }}
+{{- end }}
