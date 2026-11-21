@@ -5,15 +5,22 @@ COPY package*.json ./
 # npm ci installs exactly what package-lock.json pins (npm install could drift).
 RUN npm ci --omit=dev --no-audit --no-fund
 
-# Syntax check of every source file, then the "test" script once package.json has one.
+# Syntax check, ESLint (eslint.config.js), then unit tests with coverage (node:test + supertest, test/*.test.js).
 # CI runs this before building the image.
 FROM node:26-alpine AS test
+# pipefail so a failing `find` can't be hidden by xargs
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN find src -name '*.js' -print0 | xargs -0 -n1 node --check && \
-    npm test --if-present
+    npm run lint && \
+    npm test
+
+# Coverage report for SonarCloud: docker build --target coverage --output type=local,dest=out .
+FROM scratch AS coverage
+COPY --from=test /app/coverage/ /
 
 FROM node:26-alpine
 ENV NODE_ENV=production \

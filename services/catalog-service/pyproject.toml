@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --cov=app --cov-report=term-missing --cov-report=xml:coverage/coverage.xml"
+
+[tool.coverage.run]
+relative_files = true

@@ -4,9 +4,11 @@ RUN pip install --no-cache-dir locust==2.47.0 && useradd -u 10001 -m app
 WORKDIR /app
 COPY locustfile.py .
 
-# Loads the locustfile and lists its user classes, without generating any traffic.
+# Ruff lint, then load the locustfile and list its user classes, without generating any traffic.
 FROM base AS test
-RUN locust -f /app/locustfile.py --list
+RUN pip install --no-cache-dir ruff==0.17.6
+COPY ruff.toml .
+RUN ruff check . && locust -f /app/locustfile.py --list
 
 FROM base
 USER 10001

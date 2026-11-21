@@ -6,14 +6,19 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && opentelemetry-bootstrap -a install
 COPY app ./app
 
-# Lint for real errors (syntax, undefined names), prove the app imports with its pinned
-# dependencies, then run pytest once a tests/ folder exists. CI runs this before building the image.
+# Ruff lint (ruff.toml), prove the app imports with its pinned dependencies, then pytest with coverage
+# (tests/, settings in pyproject.toml). CI runs this before building the image.
 FROM base AS test
-RUN pip install --no-cache-dir ruff pytest
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY . .
-RUN ruff check --select E9,F63,F7,F82 . && \
+RUN ruff check . && \
     python -c "import app.main" && \
-    if [ -d tests ]; then python -m pytest -q tests; else echo "no tests/ yet"; fi
+    python -m pytest
+
+# Coverage report for SonarCloud: docker build --target coverage --output type=local,dest=out .
+FROM scratch AS coverage
+COPY --from=test /app/coverage/ /
 
 FROM base
 RUN useradd -u 10001 -m app

@@ -321,5 +321,10 @@ app.use((err, req, res, next) => {
   return errorHandler(err, req, res, next);
 });
 
-const server = app.listen(PORT, () => logger.info({ port: PORT, upstreams: svc }, 'frontend listening'));
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+// Exported so tests can drive the app with supertest; only listens when run directly.
+module.exports = { app, svc };
+
+if (require.main === module) {
+  const server = app.listen(PORT, () => logger.info({ port: PORT, upstreams: svc }, 'frontend listening'));
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+}

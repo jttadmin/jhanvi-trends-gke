@@ -36,7 +36,7 @@ jobs:
       # dev uses shop.bhumaji.com today (values.yaml default); stage/prod hosts come from values-stage/prod.yaml
       BASE_URL: ${{ inputs.base_url != '' && inputs.base_url || (inputs.environment == 'stage' && 'https://shop.stage.bhumaji.com' || 'https://shop.bhumaji.com') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Guard heavy tests on prod
         if: inputs.environment == 'prod' && (inputs.suite == 'load' || inputs.suite == 'stress')
@@ -59,7 +59,7 @@ jobs:
 
       - name: Install k6
         if: inputs.suite == 'load' || inputs.suite == 'stress'
-        uses: grafana/setup-k6-action@v1
+        uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1.3.0
 
       - name: Load
         if: inputs.suite == 'load'
@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ inputs.environment }}-${{ inputs.suite }}-report
           path: |

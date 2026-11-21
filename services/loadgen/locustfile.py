@@ -16,8 +16,11 @@ class Shopper(HttpUser):
 
     def on_start(self):
         email = f"shopper-{uuid.uuid4().hex[:10]}@loadgen.jhanvi-trends.local"
-        res = self.client.post("/api/auth/register", json={"name": "Load Shopper", "email": email, "password": "loadgen123"},
-                               name="/api/auth/register")
+        res = self.client.post(
+            "/api/auth/register",
+            json={"name": "Load Shopper", "email": email, "password": "loadgen123"},
+            name="/api/auth/register",
+        )
         token = res.json().get("token") if res.ok else None
         self.client.headers["authorization"] = f"Bearer {token}" if token else ""
 
@@ -44,7 +47,9 @@ class Shopper(HttpUser):
 
     @task(1)
     def checkout(self):
-        self.client.post("/api/cart/items", json={"productId": random.randint(1, 24), "quantity": 1}, name="/api/cart/items")
+        self.client.post(
+            "/api/cart/items", json={"productId": random.randint(1, 24), "quantity": 1}, name="/api/cart/items"
+        )
         with self.client.post("/api/checkout", name="/api/checkout", catch_response=True, json={
             "shippingAddress": {"fullName": "Load Shopper", "line1": "12 MG Road", "city": "Bengaluru",
                                 "pincode": "560001", "state": "Karnataka"},
