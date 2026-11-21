@@ -39,8 +39,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
       - run: terraform fmt -check -recursive
@@ -52,7 +52,7 @@ jobs:
             terraform -chdir="$d" validate
             echo "::endgroup::"
           done
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint module charts
         run: |
           helm lint modules/gke-platform/charts/bootstrap --set letsencryptEmail=ci@example.com
@@ -72,7 +72,7 @@ jobs:
       run:
         working-directory: envs/${{ matrix.env }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: upper
         run: echo "env=$(echo '${{ matrix.env }}' | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
       # Skip (green, with a notice) until this env's Workload Identity variables exist, instead of failing.
@@ -91,14 +91,14 @@ jobs:
             echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           fi
       - if: steps.cfg.outputs.ok == 'true'
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
           service_account: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
       - if: steps.cfg.outputs.ok == 'true'
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
       - if: steps.cfg.outputs.ok == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -115,7 +115,7 @@ jobs:
           [ "$code" -eq 1 ] && exit 1 || exit 0
       - name: Comment plan on PR
         if: steps.cfg.outputs.ok == 'true' && (github.event_name == 'pull_request')
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -126,7 +126,7 @@ jobs:
               issue_number: context.issue.number,
               body: "### Terraform plan: `${{ matrix.env }}`\n```\n" + plan + "\n```"
             });
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.cfg.outputs.ok == 'true' && (github.ref == 'refs/heads/main' && steps.plan.outputs.exitcode == '2')
         with:
           name: tfplan-${{ matrix.env }}
@@ -150,9 +150,9 @@ jobs:
       run:
         working-directory: envs/${{ matrix.env }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: plan_artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         continue-on-error: true # no artifact = nothing to apply for this env
         with:
           name: tfplan-${{ matrix.env }}
@@ -161,14 +161,14 @@ jobs:
         if: steps.plan_artifact.outcome == 'success'
         run: echo "env=$(echo '${{ matrix.env }}' | tr a-z A-Z)" >> "$GITHUB_OUTPUT"
       - if: steps.plan_artifact.outcome == 'success'
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars[format('GCP_WIF_PROVIDER_{0}', steps.upper.outputs.env)] }}
           service_account: ${{ vars[format('GCP_TF_SERVICE_ACCOUNT_{0}', steps.upper.outputs.env)] }}
       - if: steps.plan_artifact.outcome == 'success'
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
       - if: steps.plan_artifact.outcome == 'success'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
       - if: steps.plan_artifact.outcome == 'success'
