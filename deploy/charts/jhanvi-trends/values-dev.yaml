@@ -13,7 +13,7 @@ services:
       tag: 1f4a91c9095c4eb08d2332e4273ed3e77c7e46fb
   catalog-service:
     image:
-      tag: ad658e0304188348e84d802bec4cc26de59f405b
+      tag: 0df3c089b07a333368acd46ca61dc02a89a4ddb1
   cart-service:
     image:
       tag: ad658e0304188348e84d802bec4cc26de59f405b
@@ -28,7 +28,7 @@ services:
       tag: 1f4a91c9095c4eb08d2332e4273ed3e77c7e46fb
   notification-service:
     image:
-      tag: ad658e0304188348e84d802bec4cc26de59f405b
+      tag: 0df3c089b07a333368acd46ca61dc02a89a4ddb1
 loadgen:
   enabled: true
   image:
