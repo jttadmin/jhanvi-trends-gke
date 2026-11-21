@@ -32,8 +32,8 @@ load_env() {
   CTX="gke-$ENV"
 
   # Kept data (survives destroy.sh; see modules/gke-platform/persistence.tf)
-  KEPT_BUCKETS=("${PROJECT}-${CLUSTER}-loki" "${PROJECT}-${CLUSTER}-tempo")
-  KEPT_BUCKET_ADDRS=("module.platform.google_storage_bucket.loki" "module.platform.google_storage_bucket.tempo")
+  KEPT_BUCKETS=("${PROJECT}-${CLUSTER}-loki" "${PROJECT}-${CLUSTER}-tempo" "${PROJECT}-${CLUSTER}-backups")
+  KEPT_BUCKET_ADDRS=("module.platform.google_storage_bucket.loki" "module.platform.google_storage_bucket.tempo" "module.platform.google_storage_bucket.backups")
   APP_SECRET_SM="jhanvi-trends-app-secrets"    # Secret Manager copy of the app's DB passwords / JWT secret
   IMPORT_FILE="$ENV_DIR/imports.auto.tf"
   LOG_FILE="$ROOT/.logs/${ENV}-$(date +%Y%m%d-%H%M%S)-$(basename "$0" .sh).log"
@@ -101,7 +101,7 @@ sm_secret_exists() { gcloud secrets describe "$APP_SECRET_SM" --project "$PROJEC
 
 # Terraform addresses kept outside `terraform destroy`
 kept_state_addrs() {
-  terraform state list 2>/dev/null | grep -E '^module\.platform\.(google_compute_disk\.kept\[|google_storage_bucket\.(loki|tempo)$)' || true
+  terraform state list 2>/dev/null | grep -E '^module\.platform\.(google_compute_disk\.kept\[|google_storage_bucket\.(loki|tempo|backups)$)' || true
 }
 
 # Write import blocks for everything kept in GCP but missing from state (IP, buckets, disks).

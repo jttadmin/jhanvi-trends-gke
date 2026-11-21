@@ -56,7 +56,7 @@ resource "google_compute_disk" "kept" {
 
   lifecycle {
     prevent_destroy = true
-    ignore_changes  = [size] # you may grow a disk by hand; never shrink/replace it
+    ignore_changes  = [size, snapshot] # grow by hand; a disk restored from a snapshot (docs/BACKUP-RESTORE.md) is not replaced
   }
   depends_on = [google_project_service.apis]
 }
