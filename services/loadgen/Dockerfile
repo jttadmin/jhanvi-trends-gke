@@ -1,5 +1,5 @@
 # Stages: base -> test (docker build --target test .) | base -> runtime (default target)
-FROM python:3.13-slim AS base
+FROM python:3.15-slim AS base
 RUN pip install --no-cache-dir locust==2.47.0 && useradd -u 10001 -m app
 WORKDIR /app
 COPY locustfile.py .
