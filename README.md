@@ -123,6 +123,20 @@ One-time setup:
 3. Optional: repo variable `AUTO_MERGE_STAGE=true` to merge dev → stage PRs automatically.
 4. To enforce the prod approval: a branch ruleset on `main` with *Require a pull request* + *Require review from Code Owners*, and **GitHub Actions** in its bypass list so CI can still push the dev tag bumps.
 
+## Verifying images
+
+Every image pushed from `main` is signed with **cosign keyless signing**: GitHub Actions' OIDC identity, a short-lived Sigstore certificate, and an entry in the public Rekor transparency log. No signing keys exist to leak. Each image also has a signed **SPDX SBOM** attestation (Syft). To check an image before you deploy it:
+
+```bash
+IMG=docker.io/jhanviadmin/jhanvi-trends-frontend:<git sha>
+ID='https://github.com/jttadmin/jhanvi-trends-gke/.github/workflows/ci.yaml@refs/heads/main'
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" "$IMG"
+cosign verify-attestation --type spdxjson --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER" "$IMG" \
+  | jq -r '.payload | @base64d | fromjson | .predicate.packages | length'   # number of packages in the SBOM
+```
+Pull-request builds produce the SBOM as a build artifact only. They aren't pushed or signed.
+
 ## Observability (every environment)
 
 ```

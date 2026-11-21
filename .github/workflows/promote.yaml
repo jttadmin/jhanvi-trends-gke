@@ -7,7 +7,7 @@
 # Two ways in:
 #   1. Automatic: when an environment is synced, Healthy and its PostSync smoke test passed, that
 #      cluster's Argo CD sends a repository_dispatch "argocd-deployed" event (modules/gke-platform/addons.tf).
-#      The "tests" job then runs the full smoke test and the functional suite (tests.yaml) against that
+#      The "tests" job then runs the full smoke test, the functional suite and the browser tests (tests.yaml) against that
 #      environment, using the tests from the deployed commit. Only if they pass:
 #      dev deployed -> PR to stage, stage deployed -> PR to prod. The tags are read from the exact commit
 #      Argo CD deployed, so only what passed is promoted, even if main has moved on since.
@@ -59,7 +59,7 @@ jobs:
     with:
       environment: ${{ github.event.client_payload.env }}
       ref: ${{ github.event.client_payload.revision }}
-      suite: ${{ github.event.client_payload.env == 'prod' && 'smoke' || 'smoke,functional' }}
+      suite: ${{ github.event.client_payload.env == 'prod' && 'smoke' || 'smoke,functional,e2e' }}
 
   promote:
     needs: tests

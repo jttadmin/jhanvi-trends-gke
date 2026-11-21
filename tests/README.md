@@ -28,6 +28,15 @@ pytest tests/functional -v -k "Cart or Checkout"   # just some areas
 ```
 Covered: auth (register, duplicate email, validation, login, bad/missing JWT, admin API blocked for customers), catalog (shape, pagination, sorting, search, category counts, detail + stock, 404, images), cart (accumulate, update, qty 0 removes, delete, invalid qty, unknown product, per-user isolation), checkout (empty cart, required address fields, full order flow + cart cleared + order privacy, client cannot set prices).
 
+## Browser end-to-end (Playwright)
+
+```bash
+cd tests/e2e && npm ci && npx playwright install --with-deps chromium
+npx playwright test                                  # desktop + mobile Chrome against BASE_URL (default dev)
+npx playwright show-report                           # HTML report with traces/screenshots of failures
+```
+It covers a real shopper's journey through the UI: products on the home page, search, product page, guest redirected to sign-in, registration, add to cart, and checkout. A declined card or out-of-stock message counts as a correct outcome.
+
 ## Load and stress (k6)
 
 Install k6: https://grafana.com/docs/k6/latest/set-up/install-k6/ (or `choco install k6` / `winget install k6` on Windows).
@@ -60,9 +69,9 @@ Also watch the Grafana **Jhanvi Trends / Service Overview** dashboard. The stres
 
 | When | What runs | Notes |
 |---|---|---|
-| Argo CD deploys **dev** or **stage** | smoke (with a real order) + functional | Called by `promote.yaml`; the promotion PR to the next environment is only opened if the tests pass |
+| Argo CD deploys **dev** or **stage** | smoke (with a real order) + functional + browser e2e | Called by `promote.yaml`; the promotion PR to the next environment is only opened if the tests pass |
 | Argo CD deploys **prod** | smoke (no order) | A failure shows up as a failed `promote` run |
-| Daily 07:13 UTC (12:43 IST) | smoke + functional on dev | Skipped, not failed, when the store is unreachable (cluster stopped) |
+| Daily 07:13 UTC (12:43 IST) | smoke + functional + browser e2e on dev | Skipped, not failed, when the store is unreachable (cluster stopped) |
 | Saturday 08:37 UTC (14:07 IST) | load test on dev, 20 shoppers for 5 min | Opt-in: set repository variable `SCHEDULED_LOAD_TEST=true` |
 | Manually | any suite | Actions → **tests** → Run workflow; load/stress are blocked on prod |
 
