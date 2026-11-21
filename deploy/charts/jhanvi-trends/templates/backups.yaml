@@ -1,0 +1,119 @@
+{{- /*
+Nightly logical backups of PostgreSQL (pg_dumpall) and MongoDB (mongodump) to GCS.
+  init container : dumps to an emptyDir with the database's own client tools
+  main container : uploads with curl using a Workload Identity token (no keys in the cluster)
+The Google service account and bucket come from Terraform (modules/gke-platform/backups.tf);
+the GSA may only CREATE objects, so this job can't read or delete older backups.
+Restore steps: docs/BACKUP-RESTORE.md. Daily disk snapshots run separately (Terraform).
+*/ -}}
+{{- if .Values.backups.enabled }}
+{{- $b := .Values.backups }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: db-backup
+  labels:
+    {{- include "jhanvi-trends.labels" . | nindent 4 }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ required "backups.gcpServiceAccount is required" $b.gcpServiceAccount | quote }}
+{{- $jobs := list }}
+{{- if .Values.postgres.enabled }}
+{{- $jobs = append $jobs (dict "name" "postgres" "image" .Values.postgres.image "uid" 70 "ext" "sql.gz"
+      "cmd" "pg_dumpall -h postgres -U \"$PGUSER\" --clean --if-exists | gzip -9 > /backup/dump") }}
+{{- end }}
+{{- if .Values.mongodb.enabled }}
+{{- $jobs = append $jobs (dict "name" "mongodb" "image" .Values.mongodb.image "uid" 999 "ext" "archive.gz"
+      "cmd" "mongodump --uri \"mongodb://$MONGO_USER:$MONGODB_PASSWORD@mongodb:27017/?authSource=admin\" --archive=/backup/dump --gzip --quiet") }}
+{{- end }}
+{{- range $jobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .name }}-backup
+  labels:
+    {{- include "jhanvi-trends.labels" $ | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 43200 # after a pause/resume, catch up a missed night (within 12h)
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            {{- include "jhanvi-trends.selector" "db-backup" | nindent 12 }}
+        spec:
+          serviceAccountName: db-backup
+          restartPolicy: Never
+          {{- include "jhanvi-trends.pullSecrets" $ | nindent 10 }}
+          enableServiceLinks: false
+          {{- include "jhanvi-trends.nodeSelector" (dict "root" $ "group" "services") | nindent 10 }}
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: { type: RuntimeDefault }
+          volumes:
+            - name: backup
+              emptyDir: { sizeLimit: {{ $b.scratchSize }} }
+          initContainers:
+            - name: dump
+              image: {{ .image }}
+              securityContext:
+                runAsUser: {{ .uid }}
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              command: [sh, -ec]
+              args:
+                - |
+                  set -o pipefail 2>/dev/null || true
+                  {{ .cmd }}
+                  test -s /backup/dump
+                  echo "dump size: $(wc -c < /backup/dump) bytes"
+              env:
+                - { name: PGUSER, value: {{ $.Values.postgres.user | quote }} }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ $.Values.global.secretName }}, key: POSTGRES_PASSWORD } }
+                - { name: MONGO_USER, value: {{ $.Values.mongodb.user | quote }} }
+                - name: MONGODB_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ $.Values.global.secretName }}, key: MONGODB_PASSWORD } }
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 512Mi }
+          containers:
+            - name: upload
+              image: {{ $.Values.smokeTest.image | quote }}
+              securityContext:
+                runAsUser: 100
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              command: [sh, -ec]
+              args:
+                - |
+                  token=$(curl -sf -H 'Metadata-Flavor: Google' \
+                    http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token \
+                    | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+                  test -n "$token" || { echo "no Workload Identity token"; exit 1; }
+                  object="{{ .name }}/$(date -u +%Y-%m-%dT%H%MZ).{{ .ext }}"
+                  curl -sf -X POST --data-binary @/backup/dump \
+                    -H "Authorization: Bearer $token" -H 'Content-Type: application/gzip' \
+                    "https://storage.googleapis.com/upload/storage/v1/b/$BUCKET/o?uploadType=media&name=$object" > /dev/null
+                  echo "uploaded gs://$BUCKET/$object"
+              env:
+                - { name: BUCKET, value: {{ required "backups.bucket is required" $b.bucket | quote }} }
+              volumeMounts:
+                - { name: backup, mountPath: /backup, readOnly: true }
+              resources:
+                requests: { cpu: 10m, memory: 16Mi }
+                limits: { memory: 64Mi }
+{{- end }}
+{{- end }}

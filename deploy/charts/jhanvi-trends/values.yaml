@@ -33,6 +33,32 @@ monitoring:
   serviceMonitors: true
   prometheusRules: true
   grafanaDashboards: true
+  # Every alert links to its section in docs/RUNBOOKS.md
+  runbookBaseUrl: https://github.com/jttadmin/jhanvi-trends-gke/blob/main/docs/RUNBOOKS.md
+# Service level objectives for the storefront API (frontend), with multi-window burn-rate alerts.
+slo:
+  enabled: true
+  availability: 99.5        # % of requests that must not be 5xx over 30 days
+  latency: 99               # % of requests that must be faster than latencyThreshold
+  latencyThreshold: "1"     # seconds; must be one of the histogram buckets (le label)
+# Ingress NetworkPolicies: default deny, then only the callers each service needs (templates/networkpolicies.yaml).
+networkPolicies:
+  enabled: false
+  ingressNamespace: traefik          # where the ingress controller runs
+  monitoringNamespace: observability # where Prometheus runs
+# Traefik middlewares on the store Ingress (templates/edge-security.yaml).
+edgeSecurity:
+  enabled: false
+  rateLimit: {average: 300, burst: 600}   # requests/second per client IP, whole store
+  authRateLimit: {average: 5, burst: 20}  # requests/second per client IP, /api/auth (login, register)
+# Nightly pg_dumpall / mongodump to GCS (templates/backups.yaml). bucket + gcpServiceAccount come from
+# `terraform output backups` and are set per environment in values-<env>.yaml.
+backups:
+  enabled: false
+  schedule: "30 20 * * *" # UTC = 02:00 IST
+  bucket: ""
+  gcpServiceAccount: ""
+  scratchSize: 2Gi
 # Every entry becomes a Deployment + Service (+ ServiceMonitor; HPA and PDB when replicas > 1 or hpa.enabled).
 # Each service runs 1 pod and autoscales (hpa) to more when average CPU or memory passes 70% of its requests.
 # With hpa.enabled the HPA owns the pod count and replicas is ignored; set hpa.enabled: false to pin replicas.

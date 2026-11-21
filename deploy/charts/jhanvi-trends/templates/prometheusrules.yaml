@@ -26,6 +26,7 @@ spec:
           for: 5m
           labels: { severity: critical }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendshigherrorrate"
             summary: "{{ "{{ $labels.job }}" }} is returning >5% server errors"
             description: "Error ratio is {{ "{{ $value | humanizePercentage }}" }} over the last 5 minutes. Check the Loki logs and Tempo traces for {{ "{{ $labels.job }}" }}."
         - alert: JhanviTrendsHighLatency
@@ -33,6 +34,7 @@ spec:
           for: 10m
           labels: { severity: warning }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendshighlatency"
             summary: "{{ "{{ $labels.job }}" }} p95 latency above 1s"
             description: "p95 is {{ "{{ $value | humanizeDuration }}" }}."
         - alert: JhanviTrendsPaymentDeclineSpike
@@ -42,6 +44,7 @@ spec:
           for: 5m
           labels: { severity: warning }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendspaymentdeclinespike"
             summary: "More than 20% of payments are being declined"
             description: "Decline ratio {{ "{{ $value | humanizePercentage }}" }}. Check the payment-service chaos settings."
         - alert: JhanviTrendsNoOrders
@@ -49,6 +52,7 @@ spec:
           for: 10m
           labels: { severity: critical }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendsnoorders"
             summary: "Checkouts are happening but no orders are being confirmed"
             description: "Customers are trying to check out but order-service has confirmed 0 orders in 30 minutes."
         - alert: JhanviTrendsLowStock
@@ -56,6 +60,7 @@ spec:
           for: 15m
           labels: { severity: info }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendslowstock"
             summary: "{{ "{{ $value }}" }} products are low on stock"
             description: "More than 3 products have fewer than 10 units available."
         - alert: JhanviTrendsNotificationBacklog
@@ -63,6 +68,7 @@ spec:
           for: 10m
           labels: { severity: warning }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendsnotificationbacklog"
             summary: "notification-service is falling behind on order-events"
             description: "Consumer lag is {{ "{{ $value }}" }} messages. Is notification-service running?"
         - alert: JhanviTrendsServiceDown
@@ -70,12 +76,73 @@ spec:
           for: 3m
           labels: { severity: critical }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendsservicedown"
             summary: "{{ "{{ $labels.job }}" }} target {{ "{{ $labels.instance }}" }} is down"
             description: "Prometheus cannot scrape this pod."
         - alert: JhanviTrendsPodRestarting
           expr: increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}"}[15m]) > 2
           labels: { severity: warning }
           annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendspodrestarting"
             summary: "{{ "{{ $labels.pod }}" }} restarted {{ "{{ $value }}" }} times in 15m"
             description: "Look at the previous container's logs in Loki."
+        - alert: JhanviTrendsBackupStale
+          expr: |
+            (time() - max by (cronjob) (kube_cronjob_status_last_successful_time{namespace="{{ .Release.Namespace }}", cronjob=~".*-backup"})) > 93600
+              and on (cronjob)
+            (time() - max by (cronjob) (kube_cronjob_created{namespace="{{ .Release.Namespace }}", cronjob=~".*-backup"})) > 93600
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            runbook_url: "{{ .Values.monitoring.runbookBaseUrl }}#jhanvitrendsbackupstale"
+            summary: "No successful {{ "{{ $labels.cronjob }}" }} in over 26 hours"
+            description: "The nightly database dump has not succeeded for more than a day. Check the CronJob's last Job logs."
+{{- if .Values.slo.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $errBudget := divf (subf 100.0 (float64 .Values.slo.availability)) 100.0 }}
+{{- $latBudget := divf (subf 100.0 (float64 .Values.slo.latency)) 100.0 }}
+
+    # Multi-window, multi-burn-rate SLO alerts (Google SRE workbook): page when the 30-day error budget
+    # would be gone in ~2 days (14.4x burn over 1h, confirmed over 5m), ticket at ~5 days (6x over 6h / 30m).
+    - name: jhanvi-trends.slo
+      interval: 30s
+      rules:
+        {{- range $w := list "5m" "30m" "1h" "6h" }}
+        - record: jhanvi_trends:slo_error_ratio:rate{{ $w }}
+          expr: |
+            sum(rate(http_server_requests_seconds_count{namespace="{{ $ns }}", job="frontend", status=~"5.."}[{{ $w }}]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count{namespace="{{ $ns }}", job="frontend"}[{{ $w }}])), 1e-9)
+        - record: jhanvi_trends:slo_slow_ratio:rate{{ $w }}
+          expr: |
+            1 - sum(rate(http_server_requests_seconds_bucket{namespace="{{ $ns }}", job="frontend", le="{{ $.Values.slo.latencyThreshold }}"}[{{ $w }}]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count{namespace="{{ $ns }}", job="frontend"}[{{ $w }}])), 1e-9)
+        {{- end }}
+        - alert: JhanviTrendsErrorBudgetFastBurn
+          expr: |
+            jhanvi_trends:slo_error_ratio:rate1h > (14.4 * {{ $errBudget }})
+              and jhanvi_trends:slo_error_ratio:rate5m > (14.4 * {{ $errBudget }})
+          labels: { severity: critical }
+          annotations:
+            runbook_url: "{{ $.Values.monitoring.runbookBaseUrl }}#jhanvitrendserrorbudgetfastburn"
+            summary: "Storefront is burning its {{ .Values.slo.availability }}% availability budget 14x too fast"
+            description: "Error ratio over the last hour is {{ "{{ $value | humanizePercentage }}" }}; at this rate the 30-day budget is gone in about 2 days."
+        - alert: JhanviTrendsErrorBudgetSlowBurn
+          expr: |
+            jhanvi_trends:slo_error_ratio:rate6h > (6 * {{ $errBudget }})
+              and jhanvi_trends:slo_error_ratio:rate30m > (6 * {{ $errBudget }})
+          labels: { severity: warning }
+          annotations:
+            runbook_url: "{{ $.Values.monitoring.runbookBaseUrl }}#jhanvitrendserrorbudgetslowburn"
+            summary: "Storefront availability budget burning 6x too fast"
+            description: "Error ratio over 6 hours is {{ "{{ $value | humanizePercentage }}" }}; the 30-day budget would last about 5 days."
+        - alert: JhanviTrendsLatencyBudgetFastBurn
+          expr: |
+            jhanvi_trends:slo_slow_ratio:rate1h > (14.4 * {{ $latBudget }})
+              and jhanvi_trends:slo_slow_ratio:rate5m > (14.4 * {{ $latBudget }})
+          labels: { severity: critical }
+          annotations:
+            runbook_url: "{{ $.Values.monitoring.runbookBaseUrl }}#jhanvitrendslatencybudgetfastburn"
+            summary: "Too many storefront requests slower than {{ .Values.slo.latencyThreshold }}s"
+            description: "{{ "{{ $value | humanizePercentage }}" }} of requests in the last hour missed the latency objective ({{ .Values.slo.latency }}% under {{ .Values.slo.latencyThreshold }}s)."
+{{- end }}
 {{- end }}
