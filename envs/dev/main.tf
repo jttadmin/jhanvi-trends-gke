@@ -47,4 +47,7 @@ module "platform" {
   traces_retention_days   = 3
   alert_slack_webhook_url = var.alert_slack_webhook_url
   alert_slack_channel     = "#jhanvi-alerts-dev"
+
+  # ---- backups: nightly dumps only; daily disk snapshots off in dev to save cost ----
+  enable_snapshot_schedule = false
 }

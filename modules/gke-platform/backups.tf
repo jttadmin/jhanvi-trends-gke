@@ -14,6 +14,12 @@
 # state, up.sh re-adopts it, destroy.sh --purge deletes it.
 # =====================================================================
 
+variable "enable_snapshot_schedule" {
+  description = "Daily disk snapshots on/off (off in dev to save cost; nightly dumps still run)"
+  type        = bool
+  default     = true
+}
+
 variable "snapshot_disks" {
   description = "Kept disks (keys of the kept volumes) that get a daily snapshot"
   type        = list(string)
@@ -33,6 +39,7 @@ variable "backup_retention_days" {
 }
 
 resource "google_compute_resource_policy" "daily_snapshots" {
+  count  = var.enable_snapshot_schedule ? 1 : 0
   name   = "${var.cluster_name}-daily-snapshots"
   region = var.region
 
@@ -57,9 +64,9 @@ resource "google_compute_resource_policy" "daily_snapshots" {
 }
 
 resource "google_compute_disk_resource_policy_attachment" "daily_snapshots" {
-  for_each = { for k in var.snapshot_disks : k => k if contains(keys(local.kept_volumes), k) }
+  for_each = var.enable_snapshot_schedule ? { for k in var.snapshot_disks : k => k if contains(keys(local.kept_volumes), k) } : {}
 
-  name = google_compute_resource_policy.daily_snapshots.name
+  name = google_compute_resource_policy.daily_snapshots[0].name
   disk = google_compute_disk.kept[each.key].name
   zone = local.kept_zone
 }
@@ -109,7 +116,7 @@ output "backups" {
   value = {
     bucket            = google_storage_bucket.backups.name
     service_account   = google_service_account.db_backup.email
-    snapshot_policy   = google_compute_resource_policy.daily_snapshots.name
+    snapshot_policy   = var.enable_snapshot_schedule ? google_compute_resource_policy.daily_snapshots[0].name : "off"
     snapshot_disks    = [for k, _ in google_compute_disk_resource_policy_attachment.daily_snapshots : k]
     dump_retention    = "${var.backup_retention_days} days"
     snapshot_retained = "${var.snapshot_retention_days} days"
