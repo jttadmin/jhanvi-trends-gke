@@ -7,8 +7,11 @@
 # Two ways in:
 #   1. Automatic: when an environment is synced, Healthy and its PostSync smoke test passed, that
 #      cluster's Argo CD sends a repository_dispatch "argocd-deployed" event (modules/gke-platform/addons.tf).
+#      The "tests" job then runs the full smoke test and the functional suite (tests.yaml) against that
+#      environment, using the tests from the deployed commit. Only if they pass:
 #      dev deployed -> PR to stage, stage deployed -> PR to prod. The tags are read from the exact commit
 #      Argo CD deployed, so only what passed is promoted, even if main has moved on since.
+#      A prod deploy gets a smoke test (no test order) and promotes nothing.
 #   2. Manual: Actions -> promote -> Run workflow (reads the tags from the tip of main).
 #
 # Only one PR per target is kept open (branch promote/<to>); newer promotions update it.
@@ -47,9 +50,24 @@ env:
   CHART: deploy/charts/jhanvi-trends
 
 jobs:
+  # Post-deploy tests for automatic (Argo CD) events. Manual promotions skip this job.
+  tests:
+    if: github.event_name == 'repository_dispatch' && contains(fromJSON('["dev","stage","prod"]'), github.event.client_payload.env)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/tests.yaml
+    with:
+      environment: ${{ github.event.client_payload.env }}
+      ref: ${{ github.event.client_payload.revision }}
+      suite: ${{ github.event.client_payload.env == 'prod' && 'smoke' || 'smoke,functional' }}
+
   promote:
+    needs: tests
     # prod is the last environment, so a prod "deployed" event has nothing to promote.
-    if: github.event_name == 'workflow_dispatch' || contains(fromJSON('["dev","stage"]'), github.event.client_payload.env)
+    # A failed post-deploy test blocks the promotion; a manual run (tests skipped) goes ahead.
+    if: >-
+      always() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' || contains(fromJSON('["dev","stage"]'), github.event.client_payload.env))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
