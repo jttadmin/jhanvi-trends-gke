@@ -1,0 +1,80 @@
+# Run the Jhanvi Trends test suites against a deployed environment.
+# Actions tab -> "tests" -> Run workflow -> pick suite + GKE environment (dev/stage/prod).
+name: tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which suite to run
+        type: choice
+        options: [smoke, functional, load, stress]
+        default: smoke
+      environment:
+        description: GKE environment to test
+        type: choice
+        options: [dev, stage, prod]
+        default: dev
+      base_url:
+        description: Optional URL override (leave empty to use the environment's URL)
+        default: ""
+      vus:
+        description: "load: concurrent shoppers / stress: MAX_VUS"
+        default: "50"
+      duration:
+        description: "load only: steady-state duration"
+        default: 10m
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # dev uses shop.bhumaji.com today (values.yaml default); stage/prod hosts come from values-stage/prod.yaml
+      BASE_URL: ${{ inputs.base_url != '' && inputs.base_url || (inputs.environment == 'stage' && 'https://shop.stage.bhumaji.com' || 'https://shop.bhumaji.com') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard heavy tests on prod
+        if: inputs.environment == 'prod' && (inputs.suite == 'load' || inputs.suite == 'stress')
+        run: |
+          echo "::error::load/stress tests are blocked on prod; run them on dev or stage"
+          exit 1
+
+      - name: Target
+        run: echo "Testing ${{ inputs.environment }} at $BASE_URL"
+
+      - name: Smoke
+        if: inputs.suite == 'smoke'
+        run: SMOKE_CHECKOUT=1 ./tests/smoke/smoke.sh
+
+      - name: Functional
+        if: inputs.suite == 'functional'
+        run: |
+          pip install -r tests/functional/requirements.txt
+          pytest tests/functional -v --junitxml=report.xml --html=report.html --self-contained-html
+
+      - name: Install k6
+        if: inputs.suite == 'load' || inputs.suite == 'stress'
+        uses: grafana/setup-k6-action@v1
+
+      - name: Load
+        if: inputs.suite == 'load'
+        run: k6 run -e VUS=${{ inputs.vus }} -e DURATION=${{ inputs.duration }} --summary-export=summary.json tests/k6/load.js
+
+      - name: Stress
+        if: inputs.suite == 'stress'
+        run: k6 run -e MAX_VUS=${{ inputs.vus }} --summary-export=summary.json tests/k6/stress.js
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.environment }}-${{ inputs.suite }}-report
+          path: |
+            report.*
+            summary.json
+          if-no-files-found: ignore
