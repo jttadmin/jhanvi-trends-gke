@@ -1,0 +1,51 @@
+# Remove old image tags from Docker Hub (docker.io/jhanviadmin/jhanvi-trends-*).
+# Actions tab -> "dockerhub-cleanup" -> Run workflow. Leave "delete" unticked first to see what would go.
+#
+# Always kept: tags in deploy/charts/jhanvi-trends/values*.yaml (dev/stage/prod), the newest N tags of each
+# image, anything pushed in the last N days, "latest", and any tags you list.
+# The kubeadm repo (jhanvi-trends-kubeadm) pushes to the SAME images: add the tags it deploys to "keep_tags"
+# if they differ from this repo's (see image tags in its deploy/charts/jhanvi-trends/values.yaml).
+# Needs DOCKERHUB_TOKEN with Read, Write, Delete scope (the one CI already uses).
+name: dockerhub-cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: Actually delete (unticked = dry run, only lists)
+        type: boolean
+        default: false
+      keep_last:
+        description: Newest tags to keep per image
+        default: "10"
+      keep_days:
+        description: Keep anything pushed within this many days
+        default: "14"
+      keep_tags:
+        description: Extra tags to keep (comma separated), e.g. the kubeadm repo's deployed tags
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Clean up Docker Hub tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          KEEP_LAST: ${{ inputs.keep_last }}
+          KEEP_DAYS: ${{ inputs.keep_days }}
+          KEEP_TAGS: ${{ inputs.keep_tags }}
+        run: |
+          python3 scripts/dockerhub-cleanup.py \
+            --keep-last "$KEEP_LAST" --keep-days "$KEEP_DAYS" --keep-tags "$KEEP_TAGS" \
+            ${{ inputs.delete && '--delete' || '' }}
