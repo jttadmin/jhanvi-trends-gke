@@ -23,10 +23,14 @@ red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 
 # req METHOD PATH [JSON_BODY] -> sets $STATUS, body in $BODY_FILE
 req() {
-  local method="$1" path="$2" data="${3:-}" args=(-sS -o "$BODY_FILE" -w '%{http_code}' -m "$TIMEOUT" -X "$method")
+  local method="$1" path="$2" data="${3:-}"
+  local args=(-sS -o "$BODY_FILE" -w '%{http_code}' -m "$TIMEOUT" -X "$method")
   [[ -n "$TOKEN" ]] && args+=(-H "authorization: Bearer $TOKEN")
   [[ -n "$data" ]] && args+=(-H 'content-type: application/json' --data "$data")
-  STATUS="$(curl "${args[@]}" "$BASE_URL$path" 2>/dev/null || echo 000)"
+  : >"$BODY_FILE"
+  # curl already prints 000 for connection errors; don't append a second one.
+  STATUS="$(curl "${args[@]}" "$BASE_URL$path" 2>/dev/null)" || true
+  [[ "$STATUS" =~ ^[0-9]{3}$ ]] || STATUS=000
 }
 
 # check NAME EXPECTED_STATUS METHOD PATH [BODY] [JQ_ASSERTION]
@@ -45,6 +49,18 @@ check() {
 }
 
 echo "Smoke testing $BASE_URL"
+
+# Fail fast with a clear message if the store isn't reachable at all (cluster down, DNS stale, ingress missing).
+req GET /healthz
+if [[ "$STATUS" == 000 ]]; then
+  red "Cannot reach $BASE_URL (no HTTP response)."
+  echo "  - Is the cluster up and the app Synced/Healthy in Argo CD?"
+  host="${BASE_URL#*://}"; host="${host%%[:/]*}"
+  echo "  - Does DNS point at the current ingress IP?  dig +short $host"
+  echo "  - Or test without the ingress: kubectl -n jhanvi-trends port-forward svc/frontend 8080:8080"
+  echo "    then: BASE_URL=http://localhost:8080 $0"
+  exit 1
+fi
 
 echo "[platform]"
 check "frontend liveness"        200 GET /healthz  "" '.status == "ok"'
