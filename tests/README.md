@@ -56,6 +56,14 @@ Also watch the Grafana **Jhanvi Trends / Service Overview** dashboard. The stres
 - Stress runs make HPA add pods, which can make the GKE node pool scale up (and cost money). Run them on purpose on dev or stage, not on a schedule. The workflow refuses load/stress against prod.
 - To exercise failure handling, change the payment chaos knobs (cluster-internal only): `kubectl -n jhanvi-trends port-forward svc/payment-service 8081:8080` then `curl -XPOST localhost:8081/chaos -H 'content-type: application/json' -d '{"failureRate":0.3,"latencyMs":800}'`.
 
-## CI
+## Automation (.github/workflows/tests.yaml)
 
-`.github/workflows/tests.yaml`: Actions → **tests** → Run workflow → pick the suite (`smoke | functional | load | stress`) and the environment (`dev | stage | prod`). Load and stress are blocked on prod. Reports are uploaded as build artifacts.
+| When | What runs | Notes |
+|---|---|---|
+| Argo CD deploys **dev** or **stage** | smoke (with a real order) + functional | Called by `promote.yaml`; the promotion PR to the next environment is only opened if the tests pass |
+| Argo CD deploys **prod** | smoke (no order) | A failure shows up as a failed `promote` run |
+| Daily 07:13 UTC (12:43 IST) | smoke + functional on dev | Skipped, not failed, when the store is unreachable (cluster stopped) |
+| Saturday 08:37 UTC (14:07 IST) | load test on dev, 20 shoppers for 5 min | Opt-in: set repository variable `SCHEDULED_LOAD_TEST=true` |
+| Manually | any suite | Actions → **tests** → Run workflow; load/stress are blocked on prod |
+
+Deploy-triggered runs use the tests from the exact commit Argo CD deployed. Reports are uploaded as build artifacts.

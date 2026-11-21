@@ -1,15 +1,23 @@
 # Run the Jhanvi Trends test suites against a deployed environment.
-# Actions tab -> "tests" -> Run workflow -> pick suite + GKE environment (dev/stage/prod).
+#
+# Runs automatically:
+#   - after every Argo CD deploy (called by promote.yaml): dev/stage get smoke + functional, and the
+#     promotion to the next environment only happens if they pass; prod gets a smoke test without an order.
+#   - daily at 07:13 UTC (12:43 IST): smoke + functional against dev. Skipped (not failed) if the store
+#     is unreachable, e.g. because the cluster is stopped to save cost.
+#   - weekly on Saturday 08:37 UTC: a small load test against dev, ONLY if the repository variable
+#     SCHEDULED_LOAD_TEST is "true" (Settings -> Secrets and variables -> Actions -> Variables).
+# Manually: Actions -> tests -> Run workflow -> pick suite + environment. Stress tests are manual only.
 name: tests
 
 on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Which suite to run
+        description: Which suite(s) to run
         type: choice
-        options: [smoke, functional, load, stress]
-        default: smoke
+        options: [smoke, functional, "smoke,functional", load, stress]
+        default: "smoke,functional"
       environment:
         description: GKE environment to test
         type: choice
@@ -24,6 +32,15 @@ on:
       duration:
         description: "load only: steady-state duration"
         default: 10m
+  workflow_call:
+    inputs:
+      suite: {type: string, default: "smoke,functional"}
+      environment: {type: string, default: dev}
+      ref: {type: string, default: "", description: "commit to take the tests from (the deployed one)"}
+      base_url: {type: string, default: ""}
+  schedule:
+    - cron: "13 7 * * *" # daily: smoke + functional on dev
+    - cron: "37 8 * * 6" # weekly: load test on dev (opt-in, see SCHEDULED_LOAD_TEST)
 
 permissions:
   contents: read
@@ -33,48 +50,86 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # dev uses shop.bhumaji.com today (values.yaml default); stage/prod hosts come from values-stage/prod.yaml
-      BASE_URL: ${{ inputs.base_url != '' && inputs.base_url || (inputs.environment == 'stage' && 'https://shop.stage.bhumaji.com' || 'https://shop.bhumaji.com') }}
+      ENV_NAME: ${{ inputs.environment || 'dev' }}
+      SUITES: >-
+        ${{ github.event_name != 'schedule' && inputs.suite
+        || (github.event.schedule == '37 8 * * 6' && 'load' || 'smoke,functional') }}
+      VUS: ${{ inputs.vus || '20' }}
+      DURATION: ${{ inputs.duration || '5m' }}
     steps:
+      - name: Weekly load test is opt-in
+        id: optin
+        if: github.event.schedule == '37 8 * * 6' && vars.SCHEDULED_LOAD_TEST != 'true'
+        run: echo "::notice::Scheduled load test skipped. Set repository variable SCHEDULED_LOAD_TEST=true to enable it."
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.optin.conclusion != 'success'
+        with:
+          ref: ${{ inputs.ref || '' }}
 
-      - name: Guard heavy tests on prod
-        if: inputs.environment == 'prod' && (inputs.suite == 'load' || inputs.suite == 'stress')
+      - name: Plan
+        id: plan
+        if: steps.optin.conclusion != 'success'
+        env:
+          BASE_URL_INPUT: ${{ inputs.base_url }}
         run: |
-          echo "::error::load/stress tests are blocked on prod; run them on dev or stage"
-          exit 1
+          case "$ENV_NAME" in
+            dev|prod) url=https://shop.bhumaji.com ;;        # dev uses the values.yaml default host today
+            stage)    url=https://shop.stage.bhumaji.com ;;
+            *) echo "::error::unknown environment '$ENV_NAME'"; exit 1 ;;
+          esac
+          url="${BASE_URL_INPUT:-$url}"
+          echo "BASE_URL=$url" >> "$GITHUB_ENV"
+          suites=",${SUITES// /},"
+          echo "suites=$suites" >> "$GITHUB_OUTPUT"
+          if [[ "$ENV_NAME" == prod && ( "$suites" == *,load,* || "$suites" == *,stress,* ) ]]; then
+            echo "::error::load/stress tests are blocked on prod; run them on dev or stage"; exit 1
+          fi
+          echo "### Testing $ENV_NAME at $url: ${SUITES}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Target
-        run: echo "Testing ${{ inputs.environment }} at $BASE_URL"
+      # Scheduled runs skip quietly when the cluster is stopped; deploy-triggered and manual runs fail instead.
+      - name: Is the store up?
+        id: up
+        if: steps.optin.conclusion != 'success'
+        run: |
+          if curl -fsS -m 10 -o /dev/null "$BASE_URL/healthz"; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == schedule ]]; then
+            echo "::notice::$BASE_URL is not reachable (cluster stopped?); skipping the scheduled tests."
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "up=true" >> "$GITHUB_OUTPUT" # let the smoke test report the details
+          fi
 
       - name: Smoke
-        if: inputs.suite == 'smoke'
-        run: SMOKE_CHECKOUT=1 ./tests/smoke/smoke.sh
+        if: steps.up.outputs.up == 'true' && contains(steps.plan.outputs.suites, ',smoke,')
+        # Places one real order (exercises order/payment/Kafka), except on prod.
+        run: SMOKE_CHECKOUT=${{ env.ENV_NAME == 'prod' && '0' || '1' }} ./tests/smoke/smoke.sh
 
       - name: Functional
-        if: inputs.suite == 'functional'
+        if: steps.up.outputs.up == 'true' && contains(steps.plan.outputs.suites, ',functional,')
         run: |
-          pip install -r tests/functional/requirements.txt
-          pytest tests/functional -v --junitxml=report.xml --html=report.html --self-contained-html
+          pip install -q -r tests/functional/requirements.txt
+          pytest tests/functional -v --junitxml=functional.xml --html=functional.html --self-contained-html
 
       - name: Install k6
-        if: inputs.suite == 'load' || inputs.suite == 'stress'
+        if: steps.up.outputs.up == 'true' && (contains(steps.plan.outputs.suites, ',load,') || contains(steps.plan.outputs.suites, ',stress,'))
         uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1.3.0
 
       - name: Load
-        if: inputs.suite == 'load'
-        run: k6 run -e VUS=${{ inputs.vus }} -e DURATION=${{ inputs.duration }} --summary-export=summary.json tests/k6/load.js
+        if: steps.up.outputs.up == 'true' && contains(steps.plan.outputs.suites, ',load,')
+        run: k6 run -e VUS="$VUS" -e DURATION="$DURATION" --summary-export=load-summary.json tests/k6/load.js
 
       - name: Stress
-        if: inputs.suite == 'stress'
-        run: k6 run -e MAX_VUS=${{ inputs.vus }} --summary-export=summary.json tests/k6/stress.js
+        if: steps.up.outputs.up == 'true' && contains(steps.plan.outputs.suites, ',stress,')
+        run: k6 run -e MAX_VUS="$VUS" --summary-export=stress-summary.json tests/k6/stress.js
 
       - name: Upload reports
-        if: always()
+        if: always() && steps.up.outputs.up == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ${{ inputs.environment }}-${{ inputs.suite }}-report
+          name: ${{ env.ENV_NAME }}-tests-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            report.*
-            summary.json
+            functional.*
+            *-summary.json
           if-no-files-found: ignore
