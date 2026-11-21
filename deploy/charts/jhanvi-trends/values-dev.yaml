@@ -7,10 +7,10 @@ global:
 services:
   frontend:
     image:
-      tag: 29235d86aefe8cfbea2c686c3c1f2cd75c162236
+      tag: 1f4a91c9095c4eb08d2332e4273ed3e77c7e46fb
   user-service:
     image:
-      tag: 29235d86aefe8cfbea2c686c3c1f2cd75c162236
+      tag: 1f4a91c9095c4eb08d2332e4273ed3e77c7e46fb
   catalog-service:
     image:
       tag: ad658e0304188348e84d802bec4cc26de59f405b
@@ -25,7 +25,7 @@ services:
       tag: ad658e0304188348e84d802bec4cc26de59f405b
   payment-service:
     image:
-      tag: 29235d86aefe8cfbea2c686c3c1f2cd75c162236
+      tag: 1f4a91c9095c4eb08d2332e4273ed3e77c7e46fb
   notification-service:
     image:
       tag: ad658e0304188348e84d802bec4cc26de59f405b
