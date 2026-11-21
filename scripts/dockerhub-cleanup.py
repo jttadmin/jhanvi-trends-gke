@@ -97,13 +97,21 @@ def main():
 
     total_del = total_bytes = failed = 0
     for repo in sorted(repos):
-        tags = sorted(paged(f"{HUB}/v2/namespaces/{a.namespace}/repositories/{repo}/tags?page_size=100", token),
-                      key=pushed_at, reverse=True)
+        everything = list(paged(f"{HUB}/v2/namespaces/{a.namespace}/repositories/{repo}/tags?page_size=100", token))
+        # cosign stores signatures/attestations as tags "sha256-<image digest>.sig|.att": they follow their image.
+        cosign = [t for t in everything if t["name"].startswith("sha256-")]
+        tags = sorted((t for t in everything if not t["name"].startswith("sha256-")), key=pushed_at, reverse=True)
         newest = {t["name"] for t in tags[: a.keep_last]}
         doomed = [t for t in tags
                   if t["name"] not in keep_always and t["name"] not in newest and pushed_at(t) < cutoff]
+        kept_digests = {t.get("digest") for t in tags if t not in doomed}
+        gone_digests = {t.get("digest") for t in doomed} - kept_digests - {None}
+        n_images = len(doomed)
+        doomed += [t for t in cosign if t["name"].split(".")[0].replace("sha256-", "sha256:", 1) in gone_digests]
         size = sum(t.get("full_size") or 0 for t in doomed)
-        print(f"{repo}: {len(tags)} tags, keep {len(tags) - len(doomed)}, delete {len(doomed)} (~{size / 1e6:.0f} MB)")
+        sig_note = f" (+{len(doomed) - n_images} signature tags)" if len(doomed) > n_images else ""
+        print(f"{repo}: {len(tags)} image tags, keep {len(tags) - n_images}, "
+              f"delete {n_images}{sig_note} (~{size / 1e6:.0f} MB)")
         for t in doomed:
             line = f"    {t['name']}  pushed {pushed_at(t):%Y-%m-%d}"
             if not a.delete:

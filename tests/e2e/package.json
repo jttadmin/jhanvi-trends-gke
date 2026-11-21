@@ -1,0 +1,11 @@
+{
+  "name": "jhanvi-trends-e2e",
+  "private": true,
+  "description": "Browser end-to-end tests for the Jhanvi Trends storefront (Playwright)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}

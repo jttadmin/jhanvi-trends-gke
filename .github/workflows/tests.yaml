@@ -1,9 +1,9 @@
 # Run the Jhanvi Trends test suites against a deployed environment.
 #
 # Runs automatically:
-#   - after every Argo CD deploy (called by promote.yaml): dev/stage get smoke + functional, and the
+#   - after every Argo CD deploy (called by promote.yaml): dev/stage get smoke + functional + e2e, and the
 #     promotion to the next environment only happens if they pass; prod gets a smoke test without an order.
-#   - daily at 07:13 UTC (12:43 IST): smoke + functional against dev. Skipped (not failed) if the store
+#   - daily at 07:13 UTC (12:43 IST): smoke + functional + browser (e2e) tests against dev. Skipped (not failed) if the store
 #     is unreachable, e.g. because the cluster is stopped to save cost.
 #   - weekly on Saturday 08:37 UTC: a small load test against dev, ONLY if the repository variable
 #     SCHEDULED_LOAD_TEST is "true" (Settings -> Secrets and variables -> Actions -> Variables).
@@ -16,8 +16,8 @@ on:
       suite:
         description: Which suite(s) to run
         type: choice
-        options: [smoke, functional, "smoke,functional", load, stress]
-        default: "smoke,functional"
+        options: [smoke, functional, e2e, "smoke,functional,e2e", load, stress]
+        default: "smoke,functional,e2e"
       environment:
         description: GKE environment to test
         type: choice
@@ -34,7 +34,7 @@ on:
         default: 10m
   workflow_call:
     inputs:
-      suite: {type: string, default: "smoke,functional"}
+      suite: {type: string, default: "smoke,functional,e2e"}
       environment: {type: string, default: dev}
       ref: {type: string, default: "", description: "commit to take the tests from (the deployed one)"}
       base_url: {type: string, default: ""}
@@ -53,7 +53,7 @@ jobs:
       ENV_NAME: ${{ inputs.environment || 'dev' }}
       SUITES: >-
         ${{ github.event_name != 'schedule' && inputs.suite
-        || (github.event.schedule == '37 8 * * 6' && 'load' || 'smoke,functional') }}
+        || (github.event.schedule == '37 8 * * 6' && 'load' || 'smoke,functional,e2e') }}
       VUS: ${{ inputs.vus || '20' }}
       DURATION: ${{ inputs.duration || '5m' }}
     steps:
@@ -112,6 +112,16 @@ jobs:
           pip install -q -r tests/functional/requirements.txt
           pytest tests/functional -v --junitxml=functional.xml --html=functional.html --self-contained-html
 
+      - name: E2E (browser, Playwright)
+        if: steps.up.outputs.up == 'true' && contains(steps.plan.outputs.suites, ',e2e,')
+        working-directory: tests/e2e
+        env:
+          CI: "true"
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+
       - name: Install k6
         if: steps.up.outputs.up == 'true' && (contains(steps.plan.outputs.suites, ',load,') || contains(steps.plan.outputs.suites, ',stress,'))
         uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1.3.0
@@ -132,4 +142,6 @@ jobs:
           path: |
             functional.*
             *-summary.json
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
           if-no-files-found: ignore
