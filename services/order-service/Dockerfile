@@ -4,10 +4,17 @@ WORKDIR /src
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 
-# Compiles and runs the unit tests (src/test/java). CI runs this before building the image.
+# Compiles, runs the unit tests (src/test/java) with JaCoCo coverage, then SpotBugs (all bound to verify).
+# CI runs this before building the image.
 FROM deps AS test
+COPY spotbugs-exclude.xml ./
 COPY src ./src
 RUN mvn -B -ntp verify
+
+# Coverage report + compiled classes for SonarCloud: docker build --target coverage --output type=local,dest=out .
+FROM scratch AS coverage
+COPY --from=test /src/target/site/jacoco/jacoco.xml /jacoco.xml
+COPY --from=test /src/target/classes/ /classes/
 
 FROM deps AS build
 COPY src ./src

@@ -1,1 +1,5 @@
 target
+coverage
+.coverage
+coverage.xml
+coverage.out

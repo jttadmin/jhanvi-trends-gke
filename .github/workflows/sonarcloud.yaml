@@ -1,0 +1,77 @@
+# SonarCloud: one dashboard for bugs, code smells, duplication and test coverage across all 8 services.
+#
+# One-time setup (until then this workflow skips itself with a notice):
+#   1. sonarcloud.io -> sign in with GitHub -> import organisation "jttadmin" -> analyse this repository.
+#   2. In the SonarCloud project: Administration -> Analysis Method -> turn OFF "Automatic Analysis".
+#   3. My Account -> Security -> generate a token; add it here as repository secret SONAR_TOKEN.
+#   Project key and organisation are in sonar-project.properties (change them if SonarCloud picked others).
+name: sonarcloud
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/**", "sonar-project.properties", ".github/workflows/sonarcloud.yaml"]
+  pull_request:
+    paths: ["services/**", "sonar-project.properties", ".github/workflows/sonarcloud.yaml"]
+  workflow_dispatch:
+
+concurrency:
+  group: sonarcloud-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SERVICES: cart-service catalog-service frontend inventory-service notification-service order-service payment-service user-service
+    steps:
+      - name: Skip when SonarCloud isn't set up
+        if: env.SONAR_TOKEN == ''
+        run: echo "::notice::SONAR_TOKEN secret not set; skipping SonarCloud. See the setup steps at the top of .github/workflows/sonarcloud.yaml."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0 # SonarCloud needs history for new-code detection and blame
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        if: env.SONAR_TOKEN != ''
+
+      # Each Dockerfile's "coverage" stage runs the same tests as CI and exports only the report,
+      # so coverage comes from exactly the toolchain the images are built with.
+      - name: Run tests and collect coverage
+        if: env.SONAR_TOKEN != ''
+        run: |
+          for svc in $SERVICES; do
+            echo "::group::$svc"
+            docker buildx build --target coverage --output "type=local,dest=coverage/$svc" \
+              --cache-from "type=gha,scope=$svc-test" "services/$svc"
+            echo "::endgroup::"
+          done
+
+      # Reports carry container paths (/app/..., /src/..., Go module paths); point them at the repo files.
+      - name: Rewrite report paths to repository paths
+        if: env.SONAR_TOKEN != ''
+        run: |
+          for svc in frontend user-service payment-service; do
+            sed -i "s#^SF:/app/#SF:services/$svc/#" "coverage/$svc/lcov.info"
+          done
+          for svc in catalog-service notification-service; do
+            sed -i -e "s#filename=\"app/#filename=\"services/$svc/app/#g" -e "s#<source>[^<]*</source>#<source>.</source>#g" \
+              "coverage/$svc/coverage.xml"
+          done
+          for svc in cart-service inventory-service; do
+            sed -i "s#^github.com/jhanvi-trends/$svc/#services/$svc/#" "coverage/$svc/coverage.out"
+          done
+          find coverage -maxdepth 2 -type f | sort
+
+      - name: SonarCloud scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
+        env:
+          SONAR_HOST_URL: https://sonarcloud.io

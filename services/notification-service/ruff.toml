@@ -1,0 +1,27 @@
+# Ruff: lint + import sorting. Run: ruff check . (CI runs it in the Dockerfile test stage)
+line-length = 120
+target-version = "py313"
+
+[lint]
+select = [
+  "E", "W",  # pycodestyle
+  "F",       # pyflakes: unused imports/variables, undefined names
+  "I",       # isort
+  "B",       # bugbear: likely bugs
+  "UP",      # pyupgrade
+  "SIM",     # simplifications
+  "S",       # bandit security checks
+  "PL",      # pylint subset
+  "RUF",     # ruff-specific
+  "BLE",     # blind except
+]
+ignore = [
+  "PLR0913", # FastAPI handlers take many query params by design
+  "PLR2004", # magic numbers (HTTP status codes) are clearer inline
+  "RUF001",  # ambiguous unicode in strings (product emoji / ₹ are intentional)
+  "PLR0917", # same, positional query params
+  "S311",    # random is for demo jitter/fake traffic, never for security
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR2004", "PLC0415"]

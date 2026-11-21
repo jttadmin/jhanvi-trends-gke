@@ -130,6 +130,26 @@ func (s *server) clearCart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// routes registers every endpoint; main wraps it with instrument(), tests call it directly.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /cart/{userId}", s.getCart)
+	mux.HandleFunc("POST /cart/{userId}/items", s.addItem)
+	mux.HandleFunc("PUT /cart/{userId}/items/{productId}", s.setItem)
+	mux.HandleFunc("DELETE /cart/{userId}/items/{productId}", s.removeItem)
+	mux.HandleFunc("DELETE /cart/{userId}", s.clearCart)
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.rdb.Ping(r.Context()).Err(); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ready"})
+	})
+	return mux
+}
+
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -147,7 +167,7 @@ func main() {
 	if err != nil {
 		log.Warn("tracing disabled", "error", err.Error())
 	} else {
-		defer shutdownTracing(context.Background())
+		defer func() { _ = shutdownTracing(context.Background()) }()
 	}
 
 	rdb := redis.NewClient(&redis.Options{
@@ -159,23 +179,7 @@ func main() {
 	}
 	s := &server{rdb: rdb, log: log}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /cart/{userId}", s.getCart)
-	mux.HandleFunc("POST /cart/{userId}/items", s.addItem)
-	mux.HandleFunc("PUT /cart/{userId}/items/{productId}", s.setItem)
-	mux.HandleFunc("DELETE /cart/{userId}/items/{productId}", s.removeItem)
-	mux.HandleFunc("DELETE /cart/{userId}", s.clearCart)
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		if err := rdb.Ping(r.Context()).Err(); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]string{"status": "ready"})
-	})
-
-	srv := &http.Server{Addr: ":" + getenv("PORT", "8080"), Handler: instrument(mux, name, log), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: ":" + getenv("PORT", "8080"), Handler: instrument(s.routes(), name, log), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		log.Info("cart-service listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

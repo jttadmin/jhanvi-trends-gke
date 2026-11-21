@@ -114,7 +114,12 @@ app.get('/users/:id', async (req, res, next) => {
 
 app.use(errorHandler);
 
-migrate().then(() => {
-  const server = app.listen(PORT, () => logger.info({ port: PORT }, 'user-service listening'));
-  process.on('SIGTERM', () => server.close(() => pool.end().then(() => process.exit(0))));
-});
+// Exported so tests can drive the app with supertest (with pool.query stubbed); only listens when run directly.
+module.exports = { app, pool, issueToken, roleOf };
+
+if (require.main === module) {
+  migrate().then(() => {
+    const server = app.listen(PORT, () => logger.info({ port: PORT }, 'user-service listening'));
+    process.on('SIGTERM', () => server.close(() => pool.end().then(() => process.exit(0))));
+  });
+}

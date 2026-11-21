@@ -54,5 +54,11 @@ app.post('/chaos', (req, res) => {
 });
 
 app.use(errorHandler);
-const server = app.listen(PORT, () => logger.info({ port: PORT, chaos }, 'payment-service listening'));
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+
+// Exported so tests can drive the app with supertest; only listens when run directly.
+module.exports = { app, chaos };
+
+if (require.main === module) {
+  const server = app.listen(PORT, () => logger.info({ port: PORT, chaos }, 'payment-service listening'));
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+}

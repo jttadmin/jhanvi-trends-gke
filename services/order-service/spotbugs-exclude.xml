@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SpotBugs findings that are false positives for Spring/JPA code. Keep this list short and explained. -->
+<FindBugsFilter>
+  <!-- JPA entities and Spring beans hand out/keep references to collections and injected beans by design. -->
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- Spring calls constructors that may throw from @Bean/@Service wiring; finalizer attacks don't apply here. -->
+  <Match>
+    <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+  </Match>
+</FindBugsFilter>

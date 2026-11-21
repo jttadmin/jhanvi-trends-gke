@@ -10,7 +10,6 @@ import time
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
-from typing import List, Optional
 
 import gridfs
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -60,7 +59,7 @@ def migrate() -> None:
             if products.estimated_document_count() == 0:
                 now = time.time()
                 for p in PRODUCTS:
-                    doc = dict(zip(FIELDS, p[1:]), active=True, updatedAt=now)
+                    doc = dict(zip(FIELDS, p[1:], strict=True), active=True, updatedAt=now)
                     products.update_one({"_id": p[0]}, {"$setOnInsert": doc}, upsert=True)
                 log(logger, logging.INFO, "seeded demo catalog", products=len(PRODUCTS))
             seed_photos()
@@ -160,9 +159,9 @@ def active_filter(include_inactive: bool) -> dict:
 
 @app.get("/products")
 def list_products(
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    ids: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    ids: str | None = None,
     sort: str = "",
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -179,7 +178,7 @@ def list_products(
             query["_id"] = {"$in": [int(i) for i in ids.split(",") if i.strip()]}
         except ValueError as exc:
             raise HTTPException(400, "ids must be comma-separated integers") from exc
-    order = SORTS.get(sort, SORTS[""]) + [("_id", ASCENDING)]
+    order = [*SORTS.get(sort, SORTS[""]), ("_id", ASCENDING)]
     total = products.count_documents(query)
     docs = list(products.find(query).sort(order).skip(offset).limit(limit))
     if q:
@@ -215,9 +214,9 @@ class ProductIn(BaseModel):
     price: float = Field(gt=0, le=10_000_000)
     mrp: float = Field(gt=0, le=10_000_000)
     description: str = Field(default="", max_length=3000)
-    features: List[str] = Field(default_factory=list, max_length=12)
+    features: list[str] = Field(default_factory=list, max_length=12)
     active: bool = True
-    icon: Optional[str] = Field(default=None, max_length=8)
+    icon: str | None = Field(default=None, max_length=8)
 
     @field_validator("name", "category", "brand", "description")
     @classmethod
@@ -226,7 +225,7 @@ class ProductIn(BaseModel):
 
     @field_validator("features")
     @classmethod
-    def clean_features(cls, v: List[str]) -> List[str]:
+    def clean_features(cls, v: list[str]) -> list[str]:
         return [f.strip()[:200] for f in v if f and f.strip()]
 
     @model_validator(mode="after")
@@ -330,7 +329,7 @@ def _svg(product_id: int) -> Response:
 <circle cx="440" cy="120" r="40" fill="#5eead4" opacity=".85"/>
 <text x="300" y="330" font-size="190" text-anchor="middle">{escape(row.get('icon') or DEFAULT_ICON)}</text>
 <text x="300" y="530" font-size="34" font-family="Segoe UI, Arial, sans-serif" font-weight="700" fill="#1d2939" text-anchor="middle">{escape(row['brand'])}</text>
-</svg>"""
+</svg>"""  # noqa: E501 - SVG markup reads better unwrapped
     return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=3600"})
 
 
@@ -359,7 +358,7 @@ def readyz():
     try:
         client.admin.command("ping")
         return {"status": "ready"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(503, f"database unavailable: {exc}") from exc
 
 

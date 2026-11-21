@@ -253,7 +253,7 @@ func migrate(ctx context.Context, db *pgxpool.Pool, log *slog.Logger) {
 			var n int
 			if err := db.QueryRow(ctx, "SELECT count(*) FROM stock").Scan(&n); err == nil && n == 0 {
 				for id := 1; id <= 24; id++ {
-					_, _ = db.Exec(ctx, "INSERT INTO stock (product_id, available) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, 25+rand.IntN(200))
+					_, _ = db.Exec(ctx, "INSERT INTO stock (product_id, available) VALUES ($1, $2) ON CONFLICT DO NOTHING", id, 25+rand.IntN(200)) //nolint:gosec // G404: demo stock quantities, not security-sensitive
 				}
 				log.Info("seeded demo stock")
 			}
@@ -267,6 +267,29 @@ func migrate(ctx context.Context, db *pgxpool.Pool, log *slog.Logger) {
 		case <-time.After(time.Duration(min(attempt, 10)) * time.Second):
 		}
 	}
+}
+
+// routes registers every endpoint; main wraps it with instrument(), tests call it directly.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /stock", s.listStock)
+	mux.HandleFunc("GET /stock/{productId}", s.getStock)
+	mux.HandleFunc("PUT /stock/{productId}", s.setStock)
+	mux.HandleFunc("POST /stock/{productId}/adjust", s.adjustStock)
+	mux.HandleFunc("DELETE /stock/{productId}", s.deleteStock)
+	mux.HandleFunc("POST /reservations", s.reserve)
+	mux.HandleFunc("POST /reservations/{orderRef}/commit", s.settle(false))
+	mux.HandleFunc("POST /reservations/{orderRef}/release", s.settle(true))
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.db.Ping(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ready"})
+	})
+	return mux
 }
 
 func getenv(k, def string) string {
@@ -285,7 +308,7 @@ func main() {
 	if shutdown, err := initTracing(ctx); err != nil {
 		log.Warn("tracing disabled", "error", err.Error())
 	} else {
-		defer shutdown(context.Background())
+		defer func() { _ = shutdown(context.Background()) }()
 	}
 
 	cfg, err := pgxpool.ParseConfig(fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s pool_max_conns=10",
@@ -320,26 +343,7 @@ func main() {
 	}()
 
 	s := &server{db: db, log: log}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /stock", s.listStock)
-	mux.HandleFunc("GET /stock/{productId}", s.getStock)
-	mux.HandleFunc("PUT /stock/{productId}", s.setStock)
-	mux.HandleFunc("POST /stock/{productId}/adjust", s.adjustStock)
-	mux.HandleFunc("DELETE /stock/{productId}", s.deleteStock)
-	mux.HandleFunc("POST /reservations", s.reserve)
-	mux.HandleFunc("POST /reservations/{orderRef}/commit", s.settle(false))
-	mux.HandleFunc("POST /reservations/{orderRef}/release", s.settle(true))
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		if err := db.Ping(r.Context()); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]string{"status": "ready"})
-	})
-
-	srv := &http.Server{Addr: ":" + getenv("PORT", "8080"), Handler: instrument(mux, name, log), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: ":" + getenv("PORT", "8080"), Handler: instrument(s.routes(), name, log), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		log.Info("inventory-service listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

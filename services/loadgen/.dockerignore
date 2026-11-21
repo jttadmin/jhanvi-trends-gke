@@ -2,3 +2,7 @@ __pycache__
 *.pyc
 .venv
 Dockerfile
+coverage
+.coverage
+coverage.xml
+coverage.out

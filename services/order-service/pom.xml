@@ -25,6 +25,8 @@
 
   <properties>
     <java.version>21</java.version>
+    <jacoco.version>0.8.16</jacoco.version>
+    <spotbugs-plugin.version>4.10.5.0</spotbugs-plugin.version>
   </properties>
 
   <dependencies>
@@ -75,6 +77,40 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+      <!-- Code coverage: target/site/jacoco/jacoco.xml (read by SonarCloud). -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals><goal>prepare-agent</goal></goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>verify</phase>
+            <goals><goal>report</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Static analysis for likely bugs; fails `mvn verify` on findings (exclusions in spotbugs-exclude.xml). -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs-plugin.version}</version>
+        <configuration>
+          <effort>Max</effort>
+          <threshold>Medium</threshold>
+          <excludeFilterFile>spotbugs-exclude.xml</excludeFilterFile>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
