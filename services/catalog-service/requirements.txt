@@ -1,6 +1,6 @@
-fastapi==0.163.2
+fastapi==0.165.0
 uvicorn[standard]==0.54.0
-pymongo==4.20.0
+pymongo==4.20.1
 prometheus-client==0.26.0
 opentelemetry-distro==0.66b2
 opentelemetry-exporter-otlp==1.45.2
