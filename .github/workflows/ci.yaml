@@ -8,9 +8,9 @@ name: ci
 on:
   push:
     branches: [main]
-    paths: ["services/**", "deploy/charts/**", ".github/workflows/ci.yaml"]
+    paths: ["services/**", "deploy/charts/**", "modules/gke-platform/charts/bootstrap/**", ".github/workflows/ci.yaml"]
   pull_request:
-    paths: ["services/**", "deploy/charts/**", ".github/workflows/ci.yaml"]
+    paths: ["services/**", "deploy/charts/**", "modules/gke-platform/charts/bootstrap/**", ".github/workflows/ci.yaml"]
   workflow_dispatch:
     inputs:
       all:
@@ -91,7 +91,7 @@ jobs:
       - name: Lint and render
         run: |
           helm lint "$CHART"
-          # Render exactly what each cluster's Argo CD renders (see argocd/envs/<env>/jhanvi-trends.yaml).
+          # Render exactly what each cluster's Argo CD renders (see modules/gke-platform/charts/bootstrap/templates/applicationset.yaml).
           : > "$RUNNER_TEMP/rendered.yaml"
           for env in dev stage prod; do
             helm lint "$CHART" -f "$CHART/values-gke.yaml" -f "$CHART/values-$env.yaml"
@@ -99,6 +99,12 @@ jobs:
               -f "$CHART/values-gke.yaml" -f "$CHART/values-$env.yaml" > "$RUNNER_TEMP/rendered-$env.yaml"
             echo "$env: rendered $(grep -c '^kind:' "$RUNNER_TEMP/rendered-$env.yaml") objects"
             cat "$RUNNER_TEMP/rendered-$env.yaml" >> "$RUNNER_TEMP/rendered.yaml"
+            echo "---" >> "$RUNNER_TEMP/rendered.yaml"
+            # The AppProject + ApplicationSet Terraform installs for this env (schema-checked below too).
+            BOOT=modules/gke-platform/charts/bootstrap
+            helm lint "$BOOT" --set letsencryptEmail=ci@example.com --set gitops.env="$env"
+            helm template jhanvi-bootstrap "$BOOT" -n argocd \
+              --set letsencryptEmail=ci@example.com --set gitops.env="$env" >> "$RUNNER_TEMP/rendered.yaml"
             echo "---" >> "$RUNNER_TEMP/rendered.yaml"
           done
       - name: Validate against Kubernetes schemas

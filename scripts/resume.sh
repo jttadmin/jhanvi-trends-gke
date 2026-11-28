@@ -41,7 +41,7 @@ ok "$ready node(s) Ready"
 for n in $($K get nodes -o name); do $K uncordon "$n" >/dev/null 2>&1 || true; done
 $K -n argocd scale statefulset argocd-application-controller --replicas=1 >/dev/null 2>&1 \
   && ok "Argo CD sync resumed"
-$K -n argocd annotate application jhanvi-trends-root argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+$K -n argocd annotate application jhanvi-trends argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
 
 # ---------- 3. wait for the store ----------
 SHOP="shop.$(sed -nE 's/^[[:space:]]*domain[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ENV_DIR/main.tf" | head -1)"

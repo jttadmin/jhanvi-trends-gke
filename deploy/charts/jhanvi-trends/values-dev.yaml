@@ -1,5 +1,5 @@
 # dev: CI writes the image tags below after every successful build on main.
-# Layered after values.yaml and values-gke.yaml (see argocd/envs/dev/jhanvi-trends.yaml).
+# Layered after values.yaml and values-gke.yaml (see the ApplicationSet in modules/gke-platform/charts/bootstrap).
 # Keep this file small: image tags plus the few settings that really differ per environment.
 
 global:

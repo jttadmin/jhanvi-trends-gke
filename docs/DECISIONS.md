@@ -20,7 +20,7 @@ Three improvements that are deliberately **not** implemented yet, because each o
 
 | Option | What it means |
 |---|---|
-| A. **One app repo, two infra repos** | `jhanvi-trends` holds the services, chart and CI (builds and signs images once). Each platform repo holds only Terraform/scripts plus `argocd/envs/*` pointing at the app chart. Industry-standard split. |
+| A. **One app repo, two infra repos** | `jhanvi-trends` holds the services, chart and CI (builds and signs images once). Each platform repo holds only Terraform/scripts plus the Argo CD ApplicationSet pointing at the app chart. Industry-standard split. |
 | B. **GKE repo becomes the single source**, kubeadm repo becomes infra-only | Same as A without creating a new repo: the kubeadm cluster's Argo CD syncs the chart from `jhanvi-trends-gke`. |
 | C. Keep two copies | Every fix twice; drift keeps growing. |
 

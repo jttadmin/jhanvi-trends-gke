@@ -3,4 +3,14 @@ letsencryptEmail: ""
 gitops:
   repoURL: https://github.com/jttadmin/jhanvi-trends-gke.git
   targetRevision: main
-  path: argocd/envs/dev
+  # dev | stage | prod: picks values-<env>.yaml and sets the env label on every generated app
+  env: dev
+  # Git directory generator: each matching folder becomes one Application
+  chartsPath: deploy/charts/*
+
+project:
+  # Namespaces the generated apps may deploy to. A new chart in deploy/charts/<name>
+  # deploys to namespace <name>, so add <name> here (envs/<env>/main.tf -> module) first.
+  namespaces: [jhanvi-trends]
+  # Argo CD syncWindows; prod sets a weekend change freeze (envs/prod/main.tf)
+  syncWindows: []
