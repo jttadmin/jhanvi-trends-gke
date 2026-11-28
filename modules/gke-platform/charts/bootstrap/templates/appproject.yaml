@@ -1,0 +1,30 @@
+# Tenancy boundary for the store: one repo, only the listed namespaces, no cluster-scoped objects
+# except the Namespace that CreateNamespace=true makes.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: jhanvi-trends
+  namespace: argocd
+spec:
+  description: Jhanvi Trends store ({{ .Values.gitops.env }})
+  sourceRepos:
+    - {{ .Values.gitops.repoURL | quote }}
+  destinations:
+    {{- range .Values.project.namespaces }}
+    - server: https://kubernetes.default.svc
+      namespace: {{ . | quote }}
+    {{- end }}
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+  orphanedResources:
+    warn: true
+  {{- with .Values.project.syncWindows }}
+  syncWindows:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}

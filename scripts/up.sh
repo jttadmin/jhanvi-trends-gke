@@ -142,7 +142,7 @@ fi
 rm -f "$tmp_env"
 
 # ---------- 5. wait for Argo CD and the store ----------
-$K -n argocd annotate application jhanvi-trends-root argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+$K -n argocd annotate application jhanvi-trends argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
 SHOP="$(terraform output -json dns_records | python3 -c 'import json,sys; print([k for k in json.load(sys.stdin) if k.startswith("shop.")][0])')"
 log "waiting for https://$SHOP to become healthy (up to 15 min)"
 for i in $(seq 1 90); do

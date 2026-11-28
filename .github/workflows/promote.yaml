@@ -182,7 +182,7 @@ jobs:
           git push -q --force origin "$branch"
           {
             echo "Promotes image tags from **$FROM** (as deployed at \`${REV::7}\`) to **$TO**."
-            echo "Merging this PR deploys it: the $TO cluster's Argo CD syncs \`argocd/envs/$TO\`."
+            echo "Merging this PR deploys it: the $TO cluster's Argo CD deploys \`values-$TO.yaml\`."
             echo
             echo "Trigger: $TRIGGER."
             echo

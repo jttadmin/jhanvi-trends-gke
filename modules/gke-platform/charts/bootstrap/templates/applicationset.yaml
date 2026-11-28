@@ -1,0 +1,77 @@
+# One ApplicationSet per cluster (replaces the old app-of-apps root app).
+#
+# Git directory generator: every folder matching gitops.chartsPath (deploy/charts/*) becomes one
+# Application with the same name, deployed to the namespace of the same name with
+#   values.yaml + values-gke.yaml + values-<env>.yaml
+# Add a chart folder -> a new app appears in every environment. Remove it -> its app is deleted.
+#
+# Platform pieces (Traefik, cert-manager, Prometheus/Grafana, Loki, Tempo, OTel) are owned by
+# Terraform in modules/gke-platform, so only app charts are deployed from here.
+#
+# {{`{{ ... }}`}} below is the ApplicationSet's own Go template, escaped so Helm leaves it alone.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: jhanvi-trends
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: {{ .Values.gitops.repoURL | quote }}
+        revision: {{ .Values.gitops.targetRevision | quote }}
+        directories:
+          - path: {{ .Values.gitops.chartsPath | quote }}
+  syncPolicy:
+    # Deleting this ApplicationSet (or helm uninstall) must never delete the store's
+    # workloads and PVCs: the generated apps are removed, their resources stay.
+    preserveResourcesOnDeletion: true
+  template:
+    metadata:
+      name: '{{`{{ .path.basename }}`}}'
+      namespace: argocd
+      labels:
+        env: {{ .Values.gitops.env | quote }} # read by the notification that starts the next promotion
+      annotations:
+        # When this env is synced, healthy and its smoke test passed, tell GitHub (repository_dispatch).
+        # promote.yaml then opens the PR to the next environment. Configured in modules/gke-platform/addons.tf.
+        notifications.argoproj.io/subscribe.on-deployed-dispatch.github-dispatch: ""
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: jhanvi-trends
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{`{{ .path.basename }}`}}'
+      source:
+        repoURL: {{ .Values.gitops.repoURL | quote }}
+        targetRevision: {{ .Values.gitops.targetRevision | quote }}
+        path: '{{`{{ .path.path }}`}}'
+        helm:
+          releaseName: '{{`{{ .path.basename }}`}}'
+          valueFiles:
+            - values.yaml
+            - values-gke.yaml
+            - values-{{ .Values.gitops.env }}.yaml
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        retry:
+          limit: 10
+          backoff: { duration: 15s, factor: 2, maxDuration: 5m }
+        syncOptions:
+          - CreateNamespace=true
+        # Pod Security Admission: enforce "baseline" (no privileged, hostPath, host network...).
+        # "restricted" is reported (warn/audit) but not enforced, because the database images
+        # (postgres, mongo, valkey, kafka) start as root before dropping privileges.
+        managedNamespaceMetadata:
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/enforce-version: latest
+            pod-security.kubernetes.io/warn: restricted
+            pod-security.kubernetes.io/audit: restricted
+      # HPAs own the replica count of the services, so Argo CD must not reset it.
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers: [/spec/replicas]

@@ -147,10 +147,26 @@ variable "gitops_target_revision" {
   default = "main"
 }
 
-variable "gitops_apps_path" {
-  description = "Folder in the repo that holds your Argo CD Application manifests (app-of-apps)"
+variable "gitops_env" {
+  description = "Environment name. The ApplicationSet deploys each chart with values-<gitops_env>.yaml and labels the apps env=<gitops_env> (read by the promotion notification)."
   type        = string
-  default     = "argocd/envs/dev"
+
+  validation {
+    condition     = contains(["dev", "stage", "prod"], var.gitops_env)
+    error_message = "gitops_env must be dev, stage or prod."
+  }
+}
+
+variable "gitops_charts_path" {
+  description = "Git directory generator pattern: every folder it matches becomes one Argo CD Application (named after the folder, deployed to the namespace of the same name)."
+  type        = string
+  default     = "deploy/charts/*"
+}
+
+variable "argocd_sync_windows" {
+  description = "Sync windows for the jhanvi-trends AppProject (Argo CD syncWindows format). Empty = sync any time."
+  type        = list(any)
+  default     = []
 }
 
 variable "argocd_github_dispatch_token" {

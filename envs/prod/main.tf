@@ -23,10 +23,21 @@ module "platform" {
 
   letsencrypt_email = "srinivas.bdn@gmail.com"
 
-  # ---- GitOps: which folder of jttadmin/jhanvi-trends-gke this cluster's Argo CD syncs ----
-  gitops_apps_path       = "argocd/envs/prod"
+  # ---- GitOps: the ApplicationSet deploys every chart in deploy/charts/ with values-<gitops_env>.yaml ----
+  gitops_env             = "prod"
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token
+
+  # Change freeze: no automated syncs from Friday 18:00 to Monday 06:00 IST.
+  # Emergency fix during a freeze: sync by hand from the UI or CLI (manualSync allows it).
+  argocd_sync_windows = [{
+    kind         = "deny"
+    schedule     = "30 12 * * 5" # Friday 18:00 IST (cron is UTC)
+    duration     = "60h"
+    applications = ["*"]
+    manualSync   = true
+    timeZone     = "UTC"
+  }]
 
   # Argo CD tells GitHub when this env is deployed + smoke-tested, which opens the next promotion PR.
   argocd_github_dispatch_token = var.argocd_github_dispatch_token

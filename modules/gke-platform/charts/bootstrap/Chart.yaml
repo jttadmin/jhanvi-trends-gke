@@ -1,5 +1,5 @@
 apiVersion: v2
 name: jhanvi-bootstrap
-description: ClusterIssuer and Argo CD root Application for Jhanvi Trends on GKE
+description: ClusterIssuers, AppProject and Argo CD ApplicationSet for Jhanvi Trends on GKE
 type: application
-version: 0.1.0
+version: 0.2.0

@@ -2,7 +2,7 @@
 
 The Jhanvi Trends store on **GKE**: the app (services, Helm chart, CI) and the Terraform that builds the cluster, with one reusable module and three environments, each in its own GCP project.
 
-Each cluster's Argo CD syncs its own folder of **this repo** (`argocd/envs/<env>/`). The kubeadm-on-GCE version of the store, with its own full copy of the app, lives in [`jttadmin/jhanvi-trends-kubeadm`](https://github.com/jttadmin/jhanvi-trends-kubeadm); the two repos don't depend on each other. App fixes need to be made in both if you want both setups to get them. Both push to the same Docker Hub images (`jhanviadmin/jhanvi-trends-<service>`), tagged by commit SHA, so neither overwrites the other's deployed tag.
+Each cluster's Argo CD runs one **ApplicationSet** (installed by Terraform) that deploys every chart in `deploy/charts/` from **this repo** with that environment's `values-<env>.yaml`. The kubeadm-on-GCE version of the store, with its own full copy of the app, lives in [`jttadmin/jhanvi-trends-kubeadm`](https://github.com/jttadmin/jhanvi-trends-kubeadm); the two repos don't depend on each other. App fixes need to be made in both if you want both setups to get them. Both push to the same Docker Hub images (`jhanviadmin/jhanvi-trends-<service>`), tagged by commit SHA, so neither overwrites the other's deployed tag.
 
 ## Layout
 
@@ -10,9 +10,9 @@ Each cluster's Argo CD syncs its own folder of **this repo** (`argocd/envs/<env>
 modules/gke-platform/        everything one environment needs
   network.tf                 VPC, subnet + pod/service ranges, Cloud NAT, static ingress IP
   gke.tf                     zonal private GKE, node SA, "stateful" + "apps" node pools
-  addons.tf                  Traefik, cert-manager, Argo CD, repo secret, app-of-apps
+  addons.tf                  Traefik, cert-manager, Argo CD, repo secret, ApplicationSet
   observability.tf           Prometheus/Alertmanager/Grafana, Loki, Tempo, OTel gateway + agent
-  charts/                    bootstrap (ClusterIssuers, root app), observability-extras (alerts)
+  charts/                    bootstrap (ClusterIssuers, AppProject, ApplicationSet), observability-extras (alerts)
 envs/
   dev/                       the cluster running today (moved.tf adopts it into the module)
   stage/                     ready to apply later
@@ -21,7 +21,6 @@ scripts/bootstrap-project.sh one-time project + state bucket setup per env
 examples/                    instrumentation example for services
 services/                    the 8 microservices + loadgen (Dockerfile per service)
 deploy/charts/jhanvi-trends/ store Helm chart: values.yaml + values-gke.yaml + values-<env>.yaml (image tags)
-argocd/envs/<env>/           AppProject + Application per environment (synced by that cluster's root app)
 docs/APP.md                  app secret, checks
 .github/workflows/
   terraform.yml              envs/** and modules/** only: plan on PR, dev auto-applies, stage/prod need approval
@@ -36,7 +35,7 @@ docs/APP.md                  app secret, checks
 | Status | **running** | not created yet | not created yet |
 | GCP project | `jhanvi-trends-prod-2611`¹ | `jhanvi-trends-stage-2611` | `jhanvi-trends-prd-2611` |
 | Hostnames | `*.bhumaji.com` (for now)² | `*.stage.bhumaji.com` | `*.bhumaji.com` |
-| Argo CD syncs | `argocd/envs/dev` | `argocd/envs/stage` | `argocd/envs/prod` |
+| ApplicationSet (`gitops_env`) | `dev` | `stage` | `prod` |
 | Image tags | `values-dev.yaml`, bumped by CI | `values-stage.yaml`, promote PR | `values-prod.yaml`, promote PR |
 | Nodes | all Spot, scale to 0 | all Spot, scale to 0 | on-demand data tier, Spot apps |
 | Retention (metrics / logs / traces) | 3 / 3 / 3 days | 3 / 3 / 3 days | 15 / 14 / 7 days |
@@ -94,7 +93,7 @@ cd envs/stage && terraform init && terraform plan && terraform apply
 terraform output dns_records            # add these A records in GoDaddy
 ```
 
-The cluster's Argo CD syncs `argocd/envs/stage`, which deploys the chart with `values-stage.yaml`. See [Promoting a release](#promoting-a-release).
+The cluster's ApplicationSet (`gitops_env = "stage"`) deploys the chart with `values-stage.yaml`. See [Promoting a release](#promoting-a-release).
 
 **Cost:** GKE's free tier covers one zonal cluster's control plane per billing account. Each extra cluster adds about $2.40/day for its control plane, on top of its nodes.
 
@@ -122,6 +121,43 @@ One-time setup:
 2. Create a fine-grained PAT with **Contents: read and write** on this repo only, save it as the repo secret `ARGOCD_DISPATCH_TOKEN`, and let `terraform.yml` apply (or `export TF_VAR_argocd_github_dispatch_token=...` locally). Without it nothing breaks: promotion is just manual.
 3. Optional: repo variable `AUTO_MERGE_STAGE=true` to merge dev → stage PRs automatically.
 4. To enforce the prod approval: a branch ruleset on `main` with *Require a pull request* + *Require review from Code Owners*, and **GitHub Actions** in its bypass list so CI can still push the dev tag bumps.
+
+## Argo CD: one ApplicationSet per cluster
+
+Terraform's bootstrap chart (`modules/gke-platform/charts/bootstrap`) installs the `jhanvi-trends` AppProject and the `jhanvi-trends` ApplicationSet. There are no Application manifests in Git any more:
+
+- **Git directory generator** over `deploy/charts/*`: each folder becomes an Application named after the folder, deployed to the namespace of the same name with `values.yaml` + `values-gke.yaml` + `values-<gitops_env>.yaml`.
+- **Add an app:** add `deploy/charts/<name>/` (with `values-gke.yaml` and `values-{dev,stage,prod}.yaml`), and add `<name>` to `project.namespaces` in `modules/gke-platform/addons.tf`. Every environment picks it up.
+- **Per-env settings** stay in `envs/<env>/main.tf`: `gitops_env`, and `argocd_sync_windows` (prod's weekend change freeze).
+- **Safety:** `preserveResourcesOnDeletion: true`, so deleting the ApplicationSet never deletes the store's workloads or PVCs.
+
+```bash
+kubectl --context gke-dev -n argocd get applicationset jhanvi-trends
+kubectl --context gke-dev -n argocd get applications -l env=dev
+```
+
+### One-time migration from app-of-apps (dev only; stage and prod don't exist yet)
+
+The old `jhanvi-trends-root` app has a cascade-delete finalizer and auto-prune. If Terraform removed it as-is, it would delete the `jhanvi-trends` app and with it the whole store, databases included. So **before merging** this change, run:
+
+```bash
+K="kubectl --context gke-dev"
+# 1. Root app: no cascade delete, no auto-sync (so it won't prune when argocd/envs/ disappears)
+$K -n argocd patch application jhanvi-trends-root --type merge \
+  -p '{"metadata":{"finalizers":null},"spec":{"syncPolicy":null}}'
+# 2. Let Helm take over the AppProject the root app created
+$K -n argocd label appproject jhanvi-trends app.kubernetes.io/managed-by=Helm --overwrite
+$K -n argocd annotate appproject jhanvi-trends --overwrite \
+  meta.helm.sh/release-name=jhanvi-bootstrap meta.helm.sh/release-namespace=argocd
+```
+
+Then merge; `terraform.yml` applies dev. Helm deletes the root app (nothing cascades) and creates the ApplicationSet, which adopts the existing `jhanvi-trends` app by name. The spec is the same, so no pods restart. Check:
+
+```bash
+$K -n argocd get application jhanvi-trends -o jsonpath='{.metadata.ownerReferences[0].kind}{"\n"}'  # ApplicationSet
+$K -n argocd get application jhanvi-trends-root   # NotFound
+$K -n jhanvi-trends get pods
+```
 
 ## Verifying images
 

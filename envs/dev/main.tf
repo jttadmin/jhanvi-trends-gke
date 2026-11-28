@@ -24,8 +24,8 @@ module "platform" {
 
   letsencrypt_email = "srinivas.bdn@gmail.com"
 
-  # ---- GitOps: which folder of this repo (jttadmin/jhanvi-trends-gke) this cluster's Argo CD syncs ----
-  gitops_apps_path       = "argocd/envs/dev"
+  # ---- GitOps: the ApplicationSet deploys every chart in deploy/charts/ with values-<gitops_env>.yaml ----
+  gitops_env             = "dev"
   gitops_target_revision = "main"
   gitops_repo_token      = var.gitops_repo_token
 

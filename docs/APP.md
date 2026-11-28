@@ -1,6 +1,6 @@
 # The store app on GKE
 
-Terraform in this repo builds the GKE cluster, Traefik, cert-manager, Argo CD and the observability stack (Prometheus, Grafana, Loki, Tempo and the OTel gateway). Argo CD then syncs `argocd/envs/<env>/` from this same repo: an AppProject (only the `jhanvi-trends` namespace, no cluster-scoped objects) and an Application that deploys the store chart (`deploy/charts/jhanvi-trends`) with `values.yaml` + `values-gke.yaml` + `values-<env>.yaml`.
+Terraform in this repo builds the GKE cluster, Traefik, cert-manager, Argo CD and the observability stack (Prometheus, Grafana, Loki, Tempo and the OTel gateway). Terraform also installs an AppProject (only the `jhanvi-trends` namespace, no cluster-scoped objects) and an ApplicationSet (`modules/gke-platform/charts/bootstrap`). Its Git directory generator turns every folder in `deploy/charts/` into one Application, so the store chart (`deploy/charts/jhanvi-trends`) is deployed as the `jhanvi-trends` app with `values.yaml` + `values-gke.yaml` + `values-<env>.yaml`.
 
 CI (`.github/workflows/ci.yaml`) builds the services that changed, pushes `jhanviadmin/jhanvi-trends-<service>:<commit>` and bumps the tags in `values-dev.yaml`; dev's Argo CD rolls them out. Stage and prod get new tags only through the promote workflow (see the README). It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
 
@@ -22,7 +22,7 @@ Keep the secret once the data stores have data. Postgres and MongoDB only read t
 ## Check it
 
 ```bash
-kubectl --context gke-dev -n argocd get applications
+kubectl --context gke-dev -n argocd get applicationsets,applications
 kubectl --context gke-dev -n jhanvi-trends get pods -o wide
 kubectl --context gke-dev -n jhanvi-trends get pvc
 kubectl --context gke-dev -n jhanvi-trends get certificate

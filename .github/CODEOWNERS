@@ -2,5 +2,5 @@
 # has "Require review from Code Owners" turned on. Promotion PRs (promote.yaml) are opened by
 # github-actions, so the owner can approve them.
 /deploy/charts/jhanvi-trends/values-prod.yaml  @jttadmin
-/argocd/envs/prod/                              @jttadmin
+/modules/gke-platform/charts/bootstrap/         @jttadmin
 /envs/prod/                                     @jttadmin
